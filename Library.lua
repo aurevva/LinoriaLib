@@ -1,4 +1,4 @@
--- v0.14
+-- v0.15
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -47,6 +47,7 @@ do
 	local function UpdateScale()
 		local ViewportSize = Camera.ViewportSize
 		_uiScale = math.clamp(ViewportSize.Y / BaseHeight, 0.45, 1)
+		if _uiScale <= 0 then _uiScale = 0.45 end
 		UIScaleObj.Scale = _uiScale
 	end
 
@@ -1239,9 +1240,15 @@ do
 
 			local State = KeyPicker:GetState()
 
+			-- Only show in keybind list if the associated toggle/feature is active
+			local parentIsActive = true
+			if ParentObj and ParentObj.Type == "Toggle" then
+				parentIsActive = ParentObj.Value == true
+			end
+
 			ContainerLabel.Text = string.format("[%s] %s (%s)", KeyPicker.Value, Info.Text, KeyPicker.Mode)
 
-			ContainerLabel.Visible = true
+			ContainerLabel.Visible = parentIsActive
 			ContainerLabel.TextColor3 = State and Library.AccentColor or Library.FontColor
 
 			Library.RegistryMap[ContainerLabel].Properties.TextColor3 = State and "AccentColor" or "FontColor"
@@ -2799,7 +2806,7 @@ do
 
 	local WatermarkOuter = Library:Create("Frame", {
 		BorderColor3 = Color3.new(0, 0, 0),
-		Position = UDim2.new(0, 100, 0, -25),
+		Position = UDim2.new(0, 10, 0, 10),
 		Size = UDim2.new(0, 213, 0, 20),
 		ZIndex = 200,
 		Visible = false,
@@ -3226,9 +3233,12 @@ function Library:CreateWindow(...)
 			Position = UDim2.new(0, 8 - 1, 0, 8 - 1),
 			Size = UDim2.new(0.5, -12 + 2, 0, 507 + 2),
 			CanvasSize = UDim2.new(0, 0, 0, 0),
-			BottomImage = "",
-			TopImage = "",
-			ScrollBarThickness = 0,
+			BottomImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
+			TopImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
+			ScrollBarThickness = IsMobile and 3 or 0,
+			ScrollBarImageColor3 = Library.AccentColor,
+			ElasticBehavior = Enum.ElasticBehavior.Always,
+			ScrollingEnabled = true,
 			ZIndex = 2,
 			Parent = TabFrame,
 		})
@@ -3239,9 +3249,12 @@ function Library:CreateWindow(...)
 			Position = UDim2.new(0.5, 4 + 1, 0, 8 - 1),
 			Size = UDim2.new(0.5, -12 + 2, 0, 507 + 2),
 			CanvasSize = UDim2.new(0, 0, 0, 0),
-			BottomImage = "",
-			TopImage = "",
-			ScrollBarThickness = 0,
+			BottomImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
+			TopImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
+			ScrollBarThickness = IsMobile and 3 or 0,
+			ScrollBarImageColor3 = Library.AccentColor,
+			ElasticBehavior = Enum.ElasticBehavior.Always,
+			ScrollingEnabled = true,
 			ZIndex = 2,
 			Parent = TabFrame,
 		})
@@ -3693,6 +3706,98 @@ function Library:CreateWindow(...)
 
 	if Config.AutoShow then
 		task.spawn(Library.Toggle)
+	end
+
+	-- Mobile sidebar (Toggle UI / Lock UI)
+	if IsMobile then
+		local DragLocked = false
+
+		local Sidebar = Library:Create("Frame", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			BackgroundColor3 = Library.MainColor,
+			BorderColor3 = Library.OutlineColor,
+			Position = UDim2.new(1, -6, 0, 60),
+			Size = UDim2.new(0, 36, 0, 78),
+			ZIndex = 200,
+			Parent = ScreenGui,
+		})
+
+		Library:AddToRegistry(Sidebar, {
+			BackgroundColor3 = "MainColor",
+			BorderColor3 = "OutlineColor",
+		})
+
+		Library:Create("UICorner", {
+			CornerRadius = UDim.new(0, 6),
+			Parent = Sidebar,
+		})
+
+		-- Toggle UI button
+		local ToggleBtn = Library:Create("TextButton", {
+			BackgroundColor3 = Library.BackgroundColor,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 4, 0, 4),
+			Size = UDim2.new(1, -8, 0, 32),
+			Text = "UI",
+			TextColor3 = Library.FontColor,
+			TextSize = 12,
+			Font = Library.Font,
+			ZIndex = 201,
+			AutoButtonColor = false,
+			Parent = Sidebar,
+		})
+
+		Library:Create("UICorner", {
+			CornerRadius = UDim.new(0, 4),
+			Parent = ToggleBtn,
+		})
+
+		Library:AddToRegistry(ToggleBtn, {
+			BackgroundColor3 = "BackgroundColor",
+			TextColor3 = "FontColor",
+		})
+
+		ToggleBtn.InputBegan:Connect(function(Input)
+			if IsClickInput(Input) then
+				task.spawn(Library.Toggle)
+			end
+		end)
+
+		-- Lock UI button
+		local LockBtn = Library:Create("TextButton", {
+			BackgroundColor3 = Library.BackgroundColor,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 4, 0, 40),
+			Size = UDim2.new(1, -8, 0, 32),
+			Text = "Lock",
+			TextColor3 = Library.FontColor,
+			TextSize = 11,
+			Font = Library.Font,
+			ZIndex = 201,
+			AutoButtonColor = false,
+			Parent = Sidebar,
+		})
+
+		Library:Create("UICorner", {
+			CornerRadius = UDim.new(0, 4),
+			Parent = LockBtn,
+		})
+
+		Library:AddToRegistry(LockBtn, {
+			BackgroundColor3 = "BackgroundColor",
+			TextColor3 = "FontColor",
+		})
+
+		LockBtn.InputBegan:Connect(function(Input)
+			if IsClickInput(Input) then
+				DragLocked = not DragLocked
+				LockBtn.Text = DragLocked and "Unlock" or "Lock"
+				LockBtn.TextColor3 = DragLocked and Library.AccentColor or Library.FontColor
+				Outer.Active = not DragLocked
+			end
+		end)
+
+		Library.MobileSidebar = Sidebar
 	end
 
 	Window.Holder = Outer
