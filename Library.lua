@@ -1,4 +1,4 @@
--- v0.12
+-- v0.13
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -34,6 +34,30 @@ ProtectGui(ScreenGui)
 
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 ScreenGui.Parent = CoreGui
+
+-- Auto-scale UI for different resolutions (reference: 1080p)
+local _uiScale = 1
+do
+	local Camera = workspace.CurrentCamera
+	local BaseHeight = 1080
+
+	local UIScaleObj = Instance.new("UIScale")
+	UIScaleObj.Parent = ScreenGui
+
+	local function UpdateScale()
+		local ViewportSize = Camera.ViewportSize
+		_uiScale = math.clamp(ViewportSize.Y / BaseHeight, 0.45, 1)
+		UIScaleObj.Scale = _uiScale
+	end
+
+	UpdateScale()
+	Camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+end
+
+-- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
+local function ScreenToOffset(x, y)
+	return x / _uiScale, y / _uiScale
+end
 
 local Toggles = {}
 local Options = {}
@@ -191,7 +215,10 @@ function Library:MakeDraggable(Instance, Cutoff)
 
 	Instance.InputBegan:Connect(function(Input)
 		if IsClickInput(Input) then
-			local ObjPos = Vector2.new(Mouse.X - Instance.AbsolutePosition.X, Mouse.Y - Instance.AbsolutePosition.Y)
+			local ObjPos = Vector2.new(
+				(Mouse.X - Instance.AbsolutePosition.X) / _uiScale,
+				(Mouse.Y - Instance.AbsolutePosition.Y) / _uiScale
+			)
 
 			if ObjPos.Y > (Cutoff or 40) then
 				return
@@ -200,9 +227,9 @@ function Library:MakeDraggable(Instance, Cutoff)
 			while IsClickHeld() do
 				Instance.Position = UDim2.new(
 					0,
-					Mouse.X - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
+					Mouse.X / _uiScale - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
 					0,
-					Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
+					Mouse.Y / _uiScale - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
 				)
 
 				RenderStepped:Wait()
@@ -254,12 +281,12 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
 		IsHovering = true
 
-		Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
+		Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) / _uiScale, (Mouse.Y + 12) / _uiScale)
 		Tooltip.Visible = true
 
 		while IsHovering do
 			RunService.Heartbeat:Wait()
-			Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
+			Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) / _uiScale, (Mouse.Y + 12) / _uiScale)
 		end
 	end)
 
@@ -501,7 +528,10 @@ do
 			Name = "Color",
 			BackgroundColor3 = Color3.new(1, 1, 1),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Position = UDim2.fromOffset(DisplayFrame.AbsolutePosition.X, DisplayFrame.AbsolutePosition.Y + 18),
+			Position = UDim2.fromOffset(
+				DisplayFrame.AbsolutePosition.X / _uiScale,
+				DisplayFrame.AbsolutePosition.Y / _uiScale + 18
+			),
 			Size = UDim2.fromOffset(230, Info.Transparency and 271 or 253),
 			Visible = false,
 			ZIndex = 15,
@@ -509,8 +539,10 @@ do
 		})
 
 		DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(function()
-			PickerFrameOuter.Position =
-				UDim2.fromOffset(DisplayFrame.AbsolutePosition.X, DisplayFrame.AbsolutePosition.Y + 18)
+			PickerFrameOuter.Position = UDim2.fromOffset(
+				DisplayFrame.AbsolutePosition.X / _uiScale,
+				DisplayFrame.AbsolutePosition.Y / _uiScale + 18
+			)
 		end)
 
 		local PickerFrameInner = Library:Create("Frame", {
@@ -741,8 +773,8 @@ do
 
 			local function updateMenuPosition()
 				ContextMenu.Container.Position = UDim2.fromOffset(
-					(DisplayFrame.AbsolutePosition.X + DisplayFrame.AbsoluteSize.X) + 4,
-					DisplayFrame.AbsolutePosition.Y + 1
+					(DisplayFrame.AbsolutePosition.X + DisplayFrame.AbsoluteSize.X) / _uiScale + 4,
+					DisplayFrame.AbsolutePosition.Y / _uiScale + 1
 				)
 			end
 
@@ -1106,8 +1138,8 @@ do
 		local ModeSelectOuter = Library:Create("Frame", {
 			BorderColor3 = Color3.new(0, 0, 0),
 			Position = UDim2.fromOffset(
-				ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X + 4,
-				ToggleLabel.AbsolutePosition.Y + 1
+				(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X) / _uiScale + 4,
+				ToggleLabel.AbsolutePosition.Y / _uiScale + 1
 			),
 			Size = UDim2.new(0, 60, 0, 45 + 2),
 			Visible = false,
@@ -1117,8 +1149,8 @@ do
 
 		ToggleLabel:GetPropertyChangedSignal("AbsolutePosition"):Connect(function()
 			ModeSelectOuter.Position = UDim2.fromOffset(
-				ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X + 4,
-				ToggleLabel.AbsolutePosition.Y + 1
+				(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X) / _uiScale + 4,
+				ToggleLabel.AbsolutePosition.Y / _uiScale + 1
 			)
 		end)
 
@@ -2172,12 +2204,12 @@ do
 
 		SliderInner.InputBegan:Connect(function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
-				local mPos = Mouse.X
+				local mPos = Mouse.X / _uiScale
 				local gPos = Fill.Size.X.Offset
-				local Diff = mPos - (Fill.AbsolutePosition.X + gPos)
+				local Diff = mPos - (Fill.AbsolutePosition.X / _uiScale + gPos)
 
 				while IsClickHeld() do
-					local nMPos = Mouse.X
+					local nMPos = Mouse.X / _uiScale
 					local nX = math.clamp(gPos + (nMPos - mPos) + Diff, 0, Slider.MaxSize)
 
 					local nValue = Slider:GetValueFromXOffset(nX)
@@ -2334,13 +2366,14 @@ do
 
 		local function RecalculateListPosition()
 			ListOuter.Position = UDim2.fromOffset(
-				DropdownOuter.AbsolutePosition.X,
-				DropdownOuter.AbsolutePosition.Y + DropdownOuter.Size.Y.Offset + 1
+				DropdownOuter.AbsolutePosition.X / _uiScale,
+				DropdownOuter.AbsolutePosition.Y / _uiScale + DropdownOuter.Size.Y.Offset + 1
 			)
 		end
 
 		local function RecalculateListSize(YSize)
-			ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
+			ListOuter.Size =
+				UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / _uiScale, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
 		end
 
 		RecalculateListPosition()
@@ -3019,15 +3052,11 @@ function Library:CreateWindow(...)
 		Config.MenuFadeTime = 0.2
 	end
 
-	-- Auto-scale window for smaller viewports (reference: 1080p)
-	local ViewportSize = workspace.CurrentCamera.ViewportSize
-	local ScaleFactor = math.clamp(ViewportSize.Y / 1080, 0.45, 1)
-
 	if typeof(Config.Position) ~= "UDim2" then
-		Config.Position = UDim2.fromOffset(math.floor(175 * ScaleFactor), math.floor(50 * ScaleFactor))
+		Config.Position = UDim2.fromOffset(175, 50)
 	end
 	if typeof(Config.Size) ~= "UDim2" then
-		Config.Size = UDim2.fromOffset(math.floor(550 * ScaleFactor), math.floor(600 * ScaleFactor))
+		Config.Size = UDim2.fromOffset(550, 600)
 	end
 
 	if Config.Center then
