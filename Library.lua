@@ -1,4 +1,4 @@
--- v0.13
+-- v0.14
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -3059,7 +3059,8 @@ function Library:CreateWindow(...)
 		Config.Size = UDim2.fromOffset(550, 600)
 	end
 
-	if Config.Center then
+	-- Auto-center on small viewports (mobile) so the window isn't off-screen
+	if Config.Center or _uiScale < 1 then
 		Config.AnchorPoint = Vector2.new(0.5, 0.5)
 		Config.Position = UDim2.fromScale(0.5, 0.5)
 	end
