@@ -1,4 +1,4 @@
--- v0.1
+-- v0.11
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -29,24 +29,6 @@ ProtectGui(ScreenGui)
 
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 ScreenGui.Parent = CoreGui
-
--- Auto-scale UI for different resolutions (reference: 1080p)
-do
-	local Camera = workspace.CurrentCamera
-	local BaseHeight = 1080
-
-	local UIScaleObj = Instance.new("UIScale")
-	UIScaleObj.Parent = ScreenGui
-
-	local function UpdateScale()
-		local ViewportSize = Camera.ViewportSize
-		local ScaleY = math.clamp(ViewportSize.Y / BaseHeight, 0.45, 1)
-		UIScaleObj.Scale = ScaleY
-	end
-
-	UpdateScale()
-	Camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
-end
 
 local Toggles = {}
 local Options = {}
@@ -836,14 +818,11 @@ do
 			ContextMenu:AddOption("Copy RGB", function()
 				pcall(
 					setclipboard,
-					table.concat(
-						{
-							math.floor(ColorPicker.Value.R * 255),
-							math.floor(ColorPicker.Value.G * 255),
-							math.floor(ColorPicker.Value.B * 255),
-						},
-						", "
-					)
+					table.concat({
+						math.floor(ColorPicker.Value.R * 255),
+						math.floor(ColorPicker.Value.G * 255),
+						math.floor(ColorPicker.Value.B * 255),
+					}, ", ")
 				)
 				Library:Notify("Copied RGB values to clipboard!", 2)
 			end)
@@ -911,14 +890,11 @@ do
 			HueCursor.Position = UDim2.new(0, 0, ColorPicker.Hue, 0)
 
 			HueBox.Text = "#" .. ColorPicker.Value:ToHex()
-			RgbBox.Text = table.concat(
-				{
-					math.floor(ColorPicker.Value.R * 255),
-					math.floor(ColorPicker.Value.G * 255),
-					math.floor(ColorPicker.Value.B * 255),
-				},
-				", "
-			)
+			RgbBox.Text = table.concat({
+				math.floor(ColorPicker.Value.R * 255),
+				math.floor(ColorPicker.Value.G * 255),
+				math.floor(ColorPicker.Value.B * 255),
+			}, ", ")
 
 			Library:SafeCallback(ColorPicker.Callback, ColorPicker.Value)
 			Library:SafeCallback(ColorPicker.Changed, ColorPicker.Value)
@@ -3038,11 +3014,15 @@ function Library:CreateWindow(...)
 		Config.MenuFadeTime = 0.2
 	end
 
+	-- Auto-scale window for smaller viewports (reference: 1080p)
+	local ViewportSize = workspace.CurrentCamera.ViewportSize
+	local ScaleFactor = math.clamp(ViewportSize.Y / 1080, 0.45, 1)
+
 	if typeof(Config.Position) ~= "UDim2" then
-		Config.Position = UDim2.fromOffset(175, 50)
+		Config.Position = UDim2.fromOffset(math.floor(175 * ScaleFactor), math.floor(50 * ScaleFactor))
 	end
 	if typeof(Config.Size) ~= "UDim2" then
-		Config.Size = UDim2.fromOffset(550, 600)
+		Config.Size = UDim2.fromOffset(math.floor(550 * ScaleFactor), math.floor(600 * ScaleFactor))
 	end
 
 	if Config.Center then
