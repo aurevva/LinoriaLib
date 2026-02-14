@@ -1,4 +1,4 @@
--- v0.11
+-- v0.12
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -15,11 +15,16 @@ local IsMobile = InputService.TouchEnabled and not InputService.MouseEnabled
 
 local _clickHeld = false
 local function IsClickInput(Input)
-	return Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch
+	local isClick = Input.UserInputType == Enum.UserInputType.MouseButton1
+		or Input.UserInputType == Enum.UserInputType.Touch
+	if isClick then
+		_clickHeld = true
+	end
+	return isClick
 end
 
 local function IsClickHeld()
-	return _clickHeld
+	return _clickHeld or InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 end
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
