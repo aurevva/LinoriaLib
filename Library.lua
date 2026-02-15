@@ -1,4 +1,4 @@
--- v0.15
+-- v0.15.1
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -37,6 +37,7 @@ ScreenGui.Parent = CoreGui
 
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
+local _invScale = 1
 do
 	local Camera = workspace.CurrentCamera
 	local BaseHeight = 1080
@@ -47,7 +48,10 @@ do
 	local function UpdateScale()
 		local ViewportSize = Camera.ViewportSize
 		_uiScale = math.clamp(ViewportSize.Y / BaseHeight, 0.45, 1)
-		if _uiScale <= 0 then _uiScale = 0.45 end
+		if _uiScale <= 0 then
+			_uiScale = 0.45
+		end
+		_invScale = 1 / _uiScale
 		UIScaleObj.Scale = _uiScale
 	end
 
@@ -57,7 +61,7 @@ end
 
 -- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
 local function ScreenToOffset(x, y)
-	return x / _uiScale, y / _uiScale
+	return x * _invScale, y * _invScale
 end
 
 local Toggles = {}
@@ -217,8 +221,8 @@ function Library:MakeDraggable(Instance, Cutoff)
 	Instance.InputBegan:Connect(function(Input)
 		if IsClickInput(Input) then
 			local ObjPos = Vector2.new(
-				(Mouse.X - Instance.AbsolutePosition.X) / _uiScale,
-				(Mouse.Y - Instance.AbsolutePosition.Y) / _uiScale
+				(Mouse.X - Instance.AbsolutePosition.X) * _invScale,
+				(Mouse.Y - Instance.AbsolutePosition.Y) * _invScale
 			)
 
 			if ObjPos.Y > (Cutoff or 40) then
@@ -228,9 +232,9 @@ function Library:MakeDraggable(Instance, Cutoff)
 			while IsClickHeld() do
 				Instance.Position = UDim2.new(
 					0,
-					Mouse.X / _uiScale - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
+					Mouse.X * _invScale - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
 					0,
-					Mouse.Y / _uiScale - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
+					Mouse.Y * _invScale - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
 				)
 
 				RenderStepped:Wait()
@@ -282,12 +286,12 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
 		IsHovering = true
 
-		Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) / _uiScale, (Mouse.Y + 12) / _uiScale)
+		Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) * _invScale, (Mouse.Y + 12) * _invScale)
 		Tooltip.Visible = true
 
 		while IsHovering do
 			RunService.Heartbeat:Wait()
-			Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) / _uiScale, (Mouse.Y + 12) / _uiScale)
+			Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) * _invScale, (Mouse.Y + 12) * _invScale)
 		end
 	end)
 
@@ -2211,12 +2215,12 @@ do
 
 		SliderInner.InputBegan:Connect(function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
-				local mPos = Mouse.X / _uiScale
+				local mPos = Mouse.X * _invScale
 				local gPos = Fill.Size.X.Offset
-				local Diff = mPos - (Fill.AbsolutePosition.X / _uiScale + gPos)
+				local Diff = mPos - (Fill.AbsolutePosition.X * _invScale + gPos)
 
 				while IsClickHeld() do
-					local nMPos = Mouse.X / _uiScale
+					local nMPos = Mouse.X * _invScale
 					local nX = math.clamp(gPos + (nMPos - mPos) + Diff, 0, Slider.MaxSize)
 
 					local nValue = Slider:GetValueFromXOffset(nX)
