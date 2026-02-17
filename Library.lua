@@ -1,4 +1,6 @@
--- v0.15.1
+--!nocheck
+--!nolint
+-- v0.16
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -35,7 +37,6 @@ ProtectGui(ScreenGui)
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 ScreenGui.Parent = CoreGui
 
--- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
 local _invScale = 1
 do
@@ -59,7 +60,6 @@ do
 	Camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
 end
 
--- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
 local function ScreenToOffset(x, y)
 	return x * _invScale, y * _invScale
 end
@@ -2070,6 +2070,7 @@ do
 			Min = Info.Min,
 			Max = Info.Max,
 			Rounding = Info.Rounding,
+			Increment = Info.Increment,
 			MaxSize = 232,
 			Type = "Slider",
 			Callback = Info.Callback or function(Value) end,
@@ -2186,6 +2187,11 @@ do
 		end
 
 		local function Round(Value)
+			if Slider.Increment then
+				local snapped = math.round(Value / Slider.Increment) * Slider.Increment
+				return tonumber(string.format("%." .. Slider.Rounding .. "f", snapped))
+			end
+
 			if Slider.Rounding == 0 then
 				return math.floor(Value)
 			end
@@ -2377,14 +2383,14 @@ do
 
 		local function RecalculateListPosition()
 			ListOuter.Position = UDim2.fromOffset(
-				DropdownOuter.AbsolutePosition.X / _uiScale,
-				DropdownOuter.AbsolutePosition.Y / _uiScale + DropdownOuter.Size.Y.Offset + 1
+				DropdownOuter.AbsolutePosition.X * _invScale,
+				DropdownOuter.AbsolutePosition.Y * _invScale + DropdownOuter.Size.Y.Offset + 1
 			)
 		end
 
 		local function RecalculateListSize(YSize)
 			ListOuter.Size =
-				UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / _uiScale, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
+				UDim2.fromOffset(DropdownOuter.AbsoluteSize.X * _invScale, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
 		end
 
 		RecalculateListPosition()
