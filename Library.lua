@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.19
+-- v0.19.5
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -3755,11 +3755,11 @@ function Library:CreateWindow(...)
 
 	-- Mobile sidebar (Toggle UI / Lock UI) - combined into one frame
 	do
-		-- Container frame for both buttons
+		-- Container frame for both buttons (stacked vertically)
 		local MobileContainerOuter = Library:Create('Frame', {
 			BorderColor3 = Color3.new(0, 0, 0);
 			Position = UDim2.new(0.008, 0, 0.018, 0);
-			Size = UDim2.new(0, 160, 0, 30);
+			Size = UDim2.new(0, 80, 0, 66); -- Width 80, Height 66 (2 buttons + divider)
 			ZIndex = 200;
 			Visible = true;
 			Parent = ScreenGui;
@@ -3805,10 +3805,10 @@ function Library:CreateWindow(...)
 			end
 		})
 
-		-- Toggle UI button (left half)
+		-- Toggle UI button (top half)
 		local ToggleUIButton = Library:Create('TextButton', {
 			Position = UDim2.new(0, 2, 0, 0);
-			Size = UDim2.new(0.5, -2, 1, 0);
+			Size = UDim2.new(1, -4, 0, 30);
 			BackgroundTransparency = 1;
 			Font = Library.Font;
 			Text = "Toggle UI";
@@ -3823,16 +3823,16 @@ function Library:CreateWindow(...)
 		Library:Create('Frame', {
 			BackgroundColor3 = Library.OutlineColor;
 			BorderSizePixel = 0;
-			Position = UDim2.new(0.5, 0, 0, 2);
-			Size = UDim2.new(0, 1, 1, -4);
+			Position = UDim2.new(0, 2, 0, 32);
+			Size = UDim2.new(1, -4, 0, 1);
 			ZIndex = 203;
 			Parent = MobileContainerGradientFrame;
 		})
 
-		-- Lock UI button (right half)
+		-- Lock UI button (bottom half)
 		local LockUIButton = Library:Create('TextButton', {
-			Position = UDim2.new(0.5, 2, 0, 0);
-			Size = UDim2.new(0.5, -2, 1, 0);
+			Position = UDim2.new(0, 2, 0, 33);
+			Size = UDim2.new(1, -4, 0, 30);
 			BackgroundTransparency = 1;
 			Font = Library.Font;
 			Text = "Lock UI";
