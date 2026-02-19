@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.17.5
+-- v0.17.6
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -3754,7 +3754,7 @@ function Library:CreateWindow(...)
 	end
 
 	-- Mobile sidebar (Toggle UI / Lock UI) - mstudio45 implementation
-	if IsMobile then
+	do
 		local ToggleUIOuter = Library:Create('Frame', {
 			BorderColor3 = Color3.new(0, 0, 0);
 			Position = UDim2.new(0.008, 0, 0.018, 0);
