@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.16
+-- v0.17
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -37,6 +37,7 @@ ProtectGui(ScreenGui)
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 ScreenGui.Parent = CoreGui
 
+-- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
 local _invScale = 1
 do
@@ -60,6 +61,7 @@ do
 	Camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
 end
 
+-- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
 local function ScreenToOffset(x, y)
 	return x * _invScale, y * _invScale
 end
@@ -91,6 +93,9 @@ local Library = {
 
 	Signals = {},
 	ScreenGui = ScreenGui,
+
+	-- Track all windows for mobile toggle UI functionality
+	Windows = {},
 }
 
 local RainbowStep = 0
@@ -220,6 +225,11 @@ function Library:MakeDraggable(Instance, Cutoff)
 
 	Instance.InputBegan:Connect(function(Input)
 		if IsClickInput(Input) then
+			-- Prevent dragging if UI is locked (mobile feature)
+			if Library.UILocked then
+				return
+			end
+
 			local ObjPos = Vector2.new(
 				(Mouse.X - Instance.AbsolutePosition.X) * _invScale,
 				(Mouse.Y - Instance.AbsolutePosition.Y) * _invScale
@@ -230,6 +240,11 @@ function Library:MakeDraggable(Instance, Cutoff)
 			end
 
 			while IsClickHeld() do
+				-- Also check lock state during drag
+				if Library.UILocked then
+					break
+				end
+
 				Instance.Position = UDim2.new(
 					0,
 					Mouse.X * _invScale - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
@@ -783,7 +798,13 @@ do
 				)
 			end
 
+			local updatingMenuSize = false
 			local function updateMenuSize()
+				if updatingMenuSize then
+					return
+				end
+				updatingMenuSize = true
+
 				local menuWidth = 60
 				for i, label in next, ContextMenu.Inner:GetChildren() do
 					if label:IsA("TextLabel") then
@@ -793,6 +814,8 @@ do
 
 				ContextMenu.Container.Size =
 					UDim2.fromOffset(menuWidth + 8, ContextMenu.Inner.Layout.AbsoluteContentSize.Y + 4)
+				
+				updatingMenuSize = false
 			end
 
 			DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateMenuPosition)
@@ -2876,6 +2899,149 @@ do
 	Library.WatermarkText = WatermarkLabel
 	Library:MakeDraggable(Library.Watermark)
 
+	-- Mobile Button List (always visible for testing purposes)
+	-- if IsMobile then
+	do
+		local MobileButtonList = Library:Create("Frame", {
+			BackgroundColor3 = Library.MainColor,
+			BorderColor3 = Library.OutlineColor,
+			BorderMode = Enum.BorderMode.Inset,
+			Position = UDim2.new(0, 10, 0, 35),
+			Size = UDim2.new(0, 213, 0, 40),
+			ZIndex = 200,
+			Parent = ScreenGui,
+		})
+
+		Library:AddToRegistry(MobileButtonList, {
+			BackgroundColor3 = "MainColor",
+			BorderColor3 = "OutlineColor",
+		})
+
+		-- UI state tracking
+		Library.UIHidden = false
+		Library.UILocked = false
+
+		-- Create Toggle UI button
+		local ToggleUIOuter = Library:Create("Frame", {
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BorderColor3 = Color3.new(0, 0, 0),
+			Position = UDim2.new(0, 5, 0, 5),
+			Size = UDim2.new(0.5, -7, 0, 30),
+			ZIndex = 201,
+			Parent = MobileButtonList,
+		})
+
+		local ToggleUIInner = Library:Create("Frame", {
+			BackgroundColor3 = Library.MainColor,
+			BorderColor3 = Library.OutlineColor,
+			BorderMode = Enum.BorderMode.Inset,
+			Size = UDim2.new(1, 0, 1, 0),
+			ZIndex = 202,
+			Parent = ToggleUIOuter,
+		})
+
+		Library:AddToRegistry(ToggleUIInner, {
+			BackgroundColor3 = "MainColor",
+			BorderColor3 = "OutlineColor",
+		})
+
+		local ToggleUILabel = Library:CreateLabel({
+			Size = UDim2.new(1, 0, 1, 0),
+			TextSize = 13,
+			Text = "Toggle UI",
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 203,
+			Parent = ToggleUIInner,
+		})
+
+		-- Create Lock UI button
+		local LockUIOuter = Library:Create("Frame", {
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BorderColor3 = Color3.new(0, 0, 0),
+			Position = UDim2.new(0.5, 2, 0, 5),
+			Size = UDim2.new(0.5, -7, 0, 30),
+			ZIndex = 201,
+			Parent = MobileButtonList,
+		})
+
+		local LockUIInner = Library:Create("Frame", {
+			BackgroundColor3 = Library.MainColor,
+			BorderColor3 = Library.OutlineColor,
+			BorderMode = Enum.BorderMode.Inset,
+			Size = UDim2.new(1, 0, 1, 0),
+			ZIndex = 202,
+			Parent = LockUIOuter,
+		})
+
+		Library:AddToRegistry(LockUIInner, {
+			BackgroundColor3 = "MainColor",
+			BorderColor3 = "OutlineColor",
+		})
+
+		local LockUILabel = Library:CreateLabel({
+			Size = UDim2.new(1, 0, 1, 0),
+			TextSize = 13,
+			Text = "Lock UI",
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 203,
+			Parent = LockUIInner,
+		})
+
+		-- UI draggable frame tracking (initialized empty, populated later)
+		Library.DraggableFrames = Library.DraggableFrames or {}
+		table.insert(Library.DraggableFrames, Library.Watermark)
+
+		-- Toggle UI button functionality
+		ToggleUIOuter.InputBegan:Connect(function(Input)
+			if IsClickInput(Input) then
+				-- Use Library.Toggle if available (created when first window is made)
+				if Library.Toggle then
+					task.spawn(Library.Toggle)
+				else
+					-- Fallback if no windows yet
+					Library.UIHidden = not Library.UIHidden
+
+					-- Toggle visibility of main UI elements (all windows)
+					for _, Window in next, Library.Windows do
+						if Window.Outer then
+							Window.Outer.Visible = not Library.UIHidden
+						end
+					end
+
+					-- Toggle watermark visibility
+					Library.Watermark.Visible = not Library.UIHidden
+
+					-- Update button text
+					ToggleUILabel.Text = Library.UIHidden and "Show UI" or "Toggle UI"
+				end
+			end
+		end)
+
+		-- Lock UI button functionality
+		LockUIOuter.InputBegan:Connect(function(Input)
+			if IsClickInput(Input) then
+				Library.UILocked = not Library.UILocked
+
+				-- Update button text to show state
+				LockUILabel.Text = Library.UILocked and "Unlock UI" or "Lock UI"
+				LockUILabel.TextColor3 = Library.UILocked and Library.RiskColor or Library.FontColor
+
+				-- Toggle Active property for all draggable frames
+				for _, Frame in next, Library.DraggableFrames do
+					if Frame then
+						Frame.Active = not Library.UILocked
+					end
+				end
+			end
+		end)
+
+		Library.MobileButtonList = MobileButtonList
+		Library.ToggleUILabel = ToggleUILabel
+		Library.LockUILabel = LockUILabel
+	end
+
 	local KeybindOuter = Library:Create("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5),
 		BorderColor3 = Color3.new(0, 0, 0),
@@ -2944,6 +3110,11 @@ do
 	Library.KeybindFrame = KeybindOuter
 	Library.KeybindContainer = KeybindContainer
 	Library:MakeDraggable(KeybindOuter)
+
+	-- Add keybind frame to draggable list if it exists
+	if Library.DraggableFrames then
+		table.insert(Library.DraggableFrames, KeybindOuter)
+	end
 end
 
 function Library:SetWatermarkVisibility(Bool)
@@ -3084,6 +3255,7 @@ function Library:CreateWindow(...)
 
 	local Window = {
 		Tabs = {},
+		Outer = nil, -- Will be set below
 	}
 
 	local Outer = Library:Create("Frame", {
@@ -3098,6 +3270,9 @@ function Library:CreateWindow(...)
 	})
 
 	Library:MakeDraggable(Outer, 25)
+
+	-- Store reference to Outer for mobile toggle UI
+	Window.Outer = Outer
 
 	local Inner = Library:Create("Frame", {
 		BackgroundColor3 = Library.MainColor,
@@ -3804,13 +3979,32 @@ function Library:CreateWindow(...)
 				LockBtn.Text = DragLocked and "Unlock" or "Lock"
 				LockBtn.TextColor3 = DragLocked and Library.AccentColor or Library.FontColor
 				Outer.Active = not DragLocked
+
+				-- Also update the global lock state for the watermark button list
+				if Library.MobileButtonList and Library.LockUILabel then
+					Library.UILocked = DragLocked
+					Library.LockUILabel.Text = DragLocked and "Unlock UI" or "Lock UI"
+					Library.LockUILabel.TextColor3 = DragLocked and Library.RiskColor or Library.FontColor
+
+					-- Toggle Active property for all draggable frames
+					for _, Frame in next, Library.DraggableFrames do
+						if Frame then
+							Frame.Active = not DragLocked
+						end
+					end
+				end
 			end
 		end)
 
 		Library.MobileSidebar = Sidebar
 	end
 
+	-------
+
 	Window.Holder = Outer
+
+	-- Register window in Library.Windows for mobile toggle UI
+	table.insert(Library.Windows, Window)
 
 	return Window
 end
