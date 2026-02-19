@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.18
+-- v0.19
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -3845,14 +3845,21 @@ function Library:CreateWindow(...)
 
 		Library:MakeDraggable(MobileContainerOuter)
 
+		-- Initialize CantDragForced state
+		Library.CantDragForced = false
+
 		ToggleUIButton.MouseButton1Down:Connect(function()
 			Library:Toggle()
 		end)
 
-		Library.CantDragForced = false
 		LockUIButton.MouseButton1Down:Connect(function()
 			Library.CantDragForced = not Library.CantDragForced
+
+			-- Update button text to show state
 			LockUIButton.Text = Library.CantDragForced and "Unlock UI" or "Lock UI"
+
+			-- Toggle dragging for the sidebar itself
+			MobileContainerOuter.Active = not Library.CantDragForced
 		end)
 	end
 
