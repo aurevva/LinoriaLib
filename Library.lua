@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.19.5
+-- v0.20
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -3754,7 +3754,7 @@ function Library:CreateWindow(...)
 	end
 
 	-- Mobile sidebar (Toggle UI / Lock UI) - combined into one frame
-	do
+	if IsMobile then
 		-- Container frame for both buttons (stacked vertically)
 		local MobileContainerOuter = Library:Create('Frame', {
 			BorderColor3 = Color3.new(0, 0, 0);
