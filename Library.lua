@@ -1,6 +1,6 @@
 --!nocheck
 --!nolint
--- v0.17
+-- v0.17.5
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
@@ -96,6 +96,9 @@ local Library = {
 
 	-- Track all windows for mobile toggle UI functionality
 	Windows = {},
+
+	-- Mobile UI lock state
+	CantDragForced = false,
 }
 
 local RainbowStep = 0
@@ -226,7 +229,7 @@ function Library:MakeDraggable(Instance, Cutoff)
 	Instance.InputBegan:Connect(function(Input)
 		if IsClickInput(Input) then
 			-- Prevent dragging if UI is locked (mobile feature)
-			if Library.UILocked then
+			if Library.UILocked or Library.CantDragForced then
 				return
 			end
 
@@ -241,7 +244,7 @@ function Library:MakeDraggable(Instance, Cutoff)
 
 			while IsClickHeld() do
 				-- Also check lock state during drag
-				if Library.UILocked then
+				if Library.UILocked or Library.CantDragForced then
 					break
 				end
 
@@ -2899,149 +2902,6 @@ do
 	Library.WatermarkText = WatermarkLabel
 	Library:MakeDraggable(Library.Watermark)
 
-	-- Mobile Button List (always visible for testing purposes)
-	-- if IsMobile then
-	do
-		local MobileButtonList = Library:Create("Frame", {
-			BackgroundColor3 = Library.MainColor,
-			BorderColor3 = Library.OutlineColor,
-			BorderMode = Enum.BorderMode.Inset,
-			Position = UDim2.new(0, 10, 0, 35),
-			Size = UDim2.new(0, 213, 0, 40),
-			ZIndex = 200,
-			Parent = ScreenGui,
-		})
-
-		Library:AddToRegistry(MobileButtonList, {
-			BackgroundColor3 = "MainColor",
-			BorderColor3 = "OutlineColor",
-		})
-
-		-- UI state tracking
-		Library.UIHidden = false
-		Library.UILocked = false
-
-		-- Create Toggle UI button
-		local ToggleUIOuter = Library:Create("Frame", {
-			BackgroundColor3 = Color3.new(0, 0, 0),
-			BorderColor3 = Color3.new(0, 0, 0),
-			Position = UDim2.new(0, 5, 0, 5),
-			Size = UDim2.new(0.5, -7, 0, 30),
-			ZIndex = 201,
-			Parent = MobileButtonList,
-		})
-
-		local ToggleUIInner = Library:Create("Frame", {
-			BackgroundColor3 = Library.MainColor,
-			BorderColor3 = Library.OutlineColor,
-			BorderMode = Enum.BorderMode.Inset,
-			Size = UDim2.new(1, 0, 1, 0),
-			ZIndex = 202,
-			Parent = ToggleUIOuter,
-		})
-
-		Library:AddToRegistry(ToggleUIInner, {
-			BackgroundColor3 = "MainColor",
-			BorderColor3 = "OutlineColor",
-		})
-
-		local ToggleUILabel = Library:CreateLabel({
-			Size = UDim2.new(1, 0, 1, 0),
-			TextSize = 13,
-			Text = "Toggle UI",
-			TextXAlignment = Enum.TextXAlignment.Center,
-			TextYAlignment = Enum.TextYAlignment.Center,
-			ZIndex = 203,
-			Parent = ToggleUIInner,
-		})
-
-		-- Create Lock UI button
-		local LockUIOuter = Library:Create("Frame", {
-			BackgroundColor3 = Color3.new(0, 0, 0),
-			BorderColor3 = Color3.new(0, 0, 0),
-			Position = UDim2.new(0.5, 2, 0, 5),
-			Size = UDim2.new(0.5, -7, 0, 30),
-			ZIndex = 201,
-			Parent = MobileButtonList,
-		})
-
-		local LockUIInner = Library:Create("Frame", {
-			BackgroundColor3 = Library.MainColor,
-			BorderColor3 = Library.OutlineColor,
-			BorderMode = Enum.BorderMode.Inset,
-			Size = UDim2.new(1, 0, 1, 0),
-			ZIndex = 202,
-			Parent = LockUIOuter,
-		})
-
-		Library:AddToRegistry(LockUIInner, {
-			BackgroundColor3 = "MainColor",
-			BorderColor3 = "OutlineColor",
-		})
-
-		local LockUILabel = Library:CreateLabel({
-			Size = UDim2.new(1, 0, 1, 0),
-			TextSize = 13,
-			Text = "Lock UI",
-			TextXAlignment = Enum.TextXAlignment.Center,
-			TextYAlignment = Enum.TextYAlignment.Center,
-			ZIndex = 203,
-			Parent = LockUIInner,
-		})
-
-		-- UI draggable frame tracking (initialized empty, populated later)
-		Library.DraggableFrames = Library.DraggableFrames or {}
-		table.insert(Library.DraggableFrames, Library.Watermark)
-
-		-- Toggle UI button functionality
-		ToggleUIOuter.InputBegan:Connect(function(Input)
-			if IsClickInput(Input) then
-				-- Use Library.Toggle if available (created when first window is made)
-				if Library.Toggle then
-					task.spawn(Library.Toggle)
-				else
-					-- Fallback if no windows yet
-					Library.UIHidden = not Library.UIHidden
-
-					-- Toggle visibility of main UI elements (all windows)
-					for _, Window in next, Library.Windows do
-						if Window.Outer then
-							Window.Outer.Visible = not Library.UIHidden
-						end
-					end
-
-					-- Toggle watermark visibility
-					Library.Watermark.Visible = not Library.UIHidden
-
-					-- Update button text
-					ToggleUILabel.Text = Library.UIHidden and "Show UI" or "Toggle UI"
-				end
-			end
-		end)
-
-		-- Lock UI button functionality
-		LockUIOuter.InputBegan:Connect(function(Input)
-			if IsClickInput(Input) then
-				Library.UILocked = not Library.UILocked
-
-				-- Update button text to show state
-				LockUILabel.Text = Library.UILocked and "Unlock UI" or "Lock UI"
-				LockUILabel.TextColor3 = Library.UILocked and Library.RiskColor or Library.FontColor
-
-				-- Toggle Active property for all draggable frames
-				for _, Frame in next, Library.DraggableFrames do
-					if Frame then
-						Frame.Active = not Library.UILocked
-					end
-				end
-			end
-		end)
-
-		Library.MobileButtonList = MobileButtonList
-		Library.ToggleUILabel = ToggleUILabel
-		Library.LockUILabel = LockUILabel
-	end
-
 	local KeybindOuter = Library:Create("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5),
 		BorderColor3 = Color3.new(0, 0, 0),
@@ -3893,110 +3753,148 @@ function Library:CreateWindow(...)
 		task.spawn(Library.Toggle)
 	end
 
-	-- Mobile sidebar (Toggle UI / Lock UI)
+	-- Mobile sidebar (Toggle UI / Lock UI) - mstudio45 implementation
 	if IsMobile then
-		local DragLocked = false
-
-		local Sidebar = Library:Create("Frame", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			BackgroundColor3 = Library.MainColor,
-			BorderColor3 = Library.OutlineColor,
-			Position = UDim2.new(1, -6, 0, 60),
-			Size = UDim2.new(0, 36, 0, 78),
-			ZIndex = 200,
-			Parent = ScreenGui,
+		local ToggleUIOuter = Library:Create('Frame', {
+			BorderColor3 = Color3.new(0, 0, 0);
+			Position = UDim2.new(0.008, 0, 0.018, 0);
+			Size = UDim2.new(0, 77, 0, 30);
+			ZIndex = 200;
+			Visible = true;
+			Parent = ScreenGui;
 		})
-
-		Library:AddToRegistry(Sidebar, {
-			BackgroundColor3 = "MainColor",
-			BorderColor3 = "OutlineColor",
+	
+		local ToggleUIInner = Library:Create('Frame', {
+			BackgroundColor3 = Library.MainColor;
+			BorderColor3 = Library.AccentColor;
+			BorderMode = Enum.BorderMode.Inset;
+			Size = UDim2.new(1, 0, 1, 0);
+			ZIndex = 201;
+			Parent = ToggleUIOuter;
 		})
-
-		Library:Create("UICorner", {
-			CornerRadius = UDim.new(0, 6),
-			Parent = Sidebar,
+	
+		Library:AddToRegistry(ToggleUIInner, {
+			BorderColor3 = 'AccentColor';
 		})
-
-		-- Toggle UI button
-		local ToggleBtn = Library:Create("TextButton", {
-			BackgroundColor3 = Library.BackgroundColor,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 4, 0, 4),
-			Size = UDim2.new(1, -8, 0, 32),
-			Text = "UI",
-			TextColor3 = Library.FontColor,
-			TextSize = 12,
-			Font = Library.Font,
-			ZIndex = 201,
-			AutoButtonColor = false,
-			Parent = Sidebar,
+	
+		local ToggleUIInnerFrame = Library:Create('Frame', {
+			BackgroundColor3 = Color3.new(1, 1, 1);
+			BorderSizePixel = 0;
+			Position = UDim2.new(0, 1, 0, 1);
+			Size = UDim2.new(1, -2, 1, -2);
+			ZIndex = 202;
+			Parent = ToggleUIInner;
 		})
-
-		Library:Create("UICorner", {
-			CornerRadius = UDim.new(0, 4),
-			Parent = ToggleBtn,
+	
+		local ToggleUIGradient = Library:Create('UIGradient', {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Library:GetDarkerColor(Library.MainColor)),
+				ColorSequenceKeypoint.new(1, Library.MainColor),
+			});
+			Rotation = -90;
+			Parent = ToggleUIInnerFrame;
 		})
-
-		Library:AddToRegistry(ToggleBtn, {
-			BackgroundColor3 = "BackgroundColor",
-			TextColor3 = "FontColor",
-		})
-
-		ToggleBtn.InputBegan:Connect(function(Input)
-			if IsClickInput(Input) then
-				task.spawn(Library.Toggle)
+	
+		Library:AddToRegistry(ToggleUIGradient, {
+			Color = function()
+				return ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Library:GetDarkerColor(Library.MainColor)),
+					ColorSequenceKeypoint.new(1, Library.MainColor),
+				})
 			end
+		})
+	
+		local ToggleUIButton = Library:Create('TextButton', {
+			Position = UDim2.new(0, 5, 0, 0);
+			Size = UDim2.new(1, -4, 1, 0);
+			BackgroundTransparency = 1;
+			Font = Library.Font;
+			Text = "Toggle UI";
+			TextColor3 = Library.FontColor;
+			TextSize = 14;
+			TextXAlignment = Enum.TextXAlignment.Left;
+			TextStrokeTransparency = 0;
+			ZIndex = 203;
+			Parent = ToggleUIInnerFrame;
+		})
+	
+		Library:MakeDraggable(ToggleUIOuter)
+
+		ToggleUIButton.MouseButton1Down:Connect(function()
+			Library:Toggle()
 		end)
 
-		-- Lock UI button
-		local LockBtn = Library:Create("TextButton", {
-			BackgroundColor3 = Library.BackgroundColor,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 4, 0, 40),
-			Size = UDim2.new(1, -8, 0, 32),
-			Text = "Lock",
-			TextColor3 = Library.FontColor,
-			TextSize = 11,
-			Font = Library.Font,
-			ZIndex = 201,
-			AutoButtonColor = false,
-			Parent = Sidebar,
+		-- Lock
+		local LockUIOuter = Library:Create('Frame', {
+			BorderColor3 = Color3.new(0, 0, 0);
+			Position = UDim2.new(0.008, 0, 0.075, 0);
+			Size = UDim2.new(0, 77, 0, 30);
+			ZIndex = 200;
+			Visible = true;
+			Parent = ScreenGui;
 		})
-
-		Library:Create("UICorner", {
-			CornerRadius = UDim.new(0, 4),
-			Parent = LockBtn,
+	
+		local LockUIInner = Library:Create('Frame', {
+			BackgroundColor3 = Library.MainColor;
+			BorderColor3 = Library.AccentColor;
+			BorderMode = Enum.BorderMode.Inset;
+			Size = UDim2.new(1, 0, 1, 0);
+			ZIndex = 201;
+			Parent = LockUIOuter;
 		})
-
-		Library:AddToRegistry(LockBtn, {
-			BackgroundColor3 = "BackgroundColor",
-			TextColor3 = "FontColor",
+	
+		Library:AddToRegistry(LockUIInner, {
+			BorderColor3 = 'AccentColor';
 		})
-
-		LockBtn.InputBegan:Connect(function(Input)
-			if IsClickInput(Input) then
-				DragLocked = not DragLocked
-				LockBtn.Text = DragLocked and "Unlock" or "Lock"
-				LockBtn.TextColor3 = DragLocked and Library.AccentColor or Library.FontColor
-				Outer.Active = not DragLocked
-
-				-- Also update the global lock state for the watermark button list
-				if Library.MobileButtonList and Library.LockUILabel then
-					Library.UILocked = DragLocked
-					Library.LockUILabel.Text = DragLocked and "Unlock UI" or "Lock UI"
-					Library.LockUILabel.TextColor3 = DragLocked and Library.RiskColor or Library.FontColor
-
-					-- Toggle Active property for all draggable frames
-					for _, Frame in next, Library.DraggableFrames do
-						if Frame then
-							Frame.Active = not DragLocked
-						end
-					end
-				end
+	
+		local LockUIInnerFrame = Library:Create('Frame', {
+			BackgroundColor3 = Color3.new(1, 1, 1);
+			BorderSizePixel = 0;
+			Position = UDim2.new(0, 1, 0, 1);
+			Size = UDim2.new(1, -2, 1, -2);
+			ZIndex = 202;
+			Parent = LockUIInner;
+		})
+	
+		local LockUIGradient = Library:Create('UIGradient', {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Library:GetDarkerColor(Library.MainColor)),
+				ColorSequenceKeypoint.new(1, Library.MainColor),
+			});
+			Rotation = -90;
+			Parent = LockUIInnerFrame;
+		})
+	
+		Library:AddToRegistry(LockUIGradient, {
+			Color = function()
+				return ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Library:GetDarkerColor(Library.MainColor)),
+					ColorSequenceKeypoint.new(1, Library.MainColor),
+				})
 			end
+		})
+	
+		local LockUIButton = Library:Create('TextButton', {
+			Position = UDim2.new(0, 5, 0, 0);
+			Size = UDim2.new(1, -4, 1, 0);
+			BackgroundTransparency = 1;
+			Font = Library.Font;
+			Text = "Lock UI";
+			TextColor3 = Library.FontColor;
+			TextSize = 14;
+			TextXAlignment = Enum.TextXAlignment.Left;
+			TextStrokeTransparency = 0;
+			ZIndex = 203;
+			Parent = LockUIInnerFrame;
+		})
+	
+		Library:MakeDraggable(LockUIOuter)
+		
+		Library.CantDragForced = false
+		LockUIButton.MouseButton1Down:Connect(function()
+			Library.CantDragForced = not Library.CantDragForced
+			LockUIButton.Text = Library.CantDragForced and "Unlock UI" or "Lock UI"
 		end)
-
-		Library.MobileSidebar = Sidebar
 	end
 
 	-------
