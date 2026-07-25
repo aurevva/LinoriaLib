@@ -3221,11 +3221,19 @@ function Library:Notify(Text, Time)
 	pcall(function()
 		ViewportWidth = workspace.CurrentCamera.ViewportSize.X * _invScale
 	end)
-	local MaxWidth = math.clamp(ViewportWidth - 30, 220, 420)
-	local TextBounds = TextService:GetTextSize(Text, 14, Library.Font, Vector2.new(MaxWidth - 20, 10000))
-	local XSize = math.clamp(TextBounds.X + 20, 140, MaxWidth)
-	local YSize = math.max(TextBounds.Y + 10, 26)
-	local ReadTime = math.min(12, 2.5 + (#Text / 32) + math.max(0, YSize - 26) / 24)
+	local TextSize = 13
+	local MaxWidth = math.clamp(ViewportWidth - 24, 160, 360)
+	local MaxTextWidth = MaxWidth - 14
+	local WidestLine = 0
+	for _, Line in string.split(Text, "\n") do
+		local LineBounds = TextService:GetTextSize(Line, TextSize, Library.Font, Vector2.new(10000, 10000))
+		WidestLine = math.max(WidestLine, LineBounds.X)
+	end
+	local WrappedWidth = math.max(math.min(WidestLine, MaxTextWidth), 1)
+	local TextBounds = TextService:GetTextSize(Text, TextSize, Library.Font, Vector2.new(WrappedWidth, 10000))
+	local XSize = math.clamp(WidestLine + 14, 96, MaxWidth)
+	local YSize = math.max(TextBounds.Y + 6, 22)
+	local ReadTime = math.min(12, 2.5 + (#Text / 32) + math.max(0, YSize - 22) / 24)
 	local DisplayTime = math.max(tonumber(Time) or 5, ReadTime)
 
 	local NotifyOuter = Library:Create("Frame", {
@@ -3279,10 +3287,10 @@ function Library:Notify(Text, Time)
 	})
 
 	local NotifyLabel = Library:CreateLabel({
-		Position = UDim2.new(0, 8, 0, 4),
-		Size = UDim2.new(1, -12, 1, -8),
+		Position = UDim2.new(0, 6, 0, 2),
+		Size = UDim2.new(1, -10, 1, -4),
 		Text = Text,
-		TextSize = 14,
+		TextSize = TextSize,
 		TextWrapped = true,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
@@ -3294,7 +3302,7 @@ function Library:Notify(Text, Time)
 		BackgroundColor3 = Library.AccentColor,
 		BorderSizePixel = 0,
 		Position = UDim2.new(0, -1, 0, -1),
-		Size = UDim2.new(0, 3, 1, 2),
+		Size = UDim2.new(0, 2, 1, 2),
 		ZIndex = 104,
 		Parent = NotifyOuter,
 	})
