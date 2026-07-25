@@ -33,6 +33,12 @@ end
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+local MountThread = coroutine.create(function()
+	local GuiParent = gethui()
+	coroutine.yield()
+	ScreenGui.Parent = GuiParent
+end)
+local MountThreadReady, MountThreadError = coroutine.resume(MountThread)
 
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
@@ -173,9 +179,9 @@ end
 function Library:Mount()
 	if Library.Mounted then return true end
 	if Library.Unloaded then return false, "library is unloaded" end
-	local Mounted, MountError = pcall(function()
-		ScreenGui.Parent = gethui()
-	end)
+	if not MountThreadReady then return false, MountThreadError end
+	if coroutine.status(MountThread) ~= "suspended" then return false, "mount thread is unavailable" end
+	local Mounted, MountError = coroutine.resume(MountThread)
 	if not Mounted then
 		Library.LastUiError = tostring(MountError)
 		return false, MountError
