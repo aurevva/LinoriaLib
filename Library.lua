@@ -31,10 +31,7 @@ end
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
--- CoreGui/gethui descendants can become inaccessible when executor callbacks
--- resume without the Plugin capability. PlayerGui keeps every Linoria callback
--- on the normal client capability path instead of fixing each property access.
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Parent = gethui()
 
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
