@@ -94,6 +94,7 @@ local Library = {
 	ScreenGui = ScreenGui,
 	UiJobs = {},
 	UiUpdaters = {},
+	UiThreads = setmetatable({}, { __mode = "k" }),
 	Unloaded = false,
 
 	-- Track all windows for mobile toggle UI functionality
@@ -125,6 +126,39 @@ function Library:AddUiUpdater(callback)
 	end
 end
 
+local function RunUiCallback(Callback, ...)
+	local Thread = coroutine.running()
+	if Thread then Library.UiThreads[Thread] = true end
+	local Results = table.pack(pcall(Callback, ...))
+	if Thread then Library.UiThreads[Thread] = nil end
+	return table.unpack(Results, 1, Results.n)
+end
+
+function Library:IsUiThread()
+	local Thread = coroutine.running()
+	return Thread ~= nil and Library.UiThreads[Thread] == true
+end
+
+function Library:RunUi(Callback, ...)
+	if typeof(Callback) ~= "function" then return false, "callback must be a function" end
+	if Library:IsUiThread() then return pcall(Callback, ...) end
+	if Library.Unloaded then return false, "library is unloaded" end
+
+	local Arguments = table.pack(...)
+	local Results = nil
+	local Completed = false
+	Library:DelayUi(0, function()
+		Results = table.pack(pcall(Callback, table.unpack(Arguments, 1, Arguments.n)))
+		Completed = true
+	end)
+
+	while not Completed do
+		if Library.Unloaded then return false, "library unloaded before UI work completed" end
+		RunService.Heartbeat:Wait()
+	end
+	return table.unpack(Results, 1, Results.n)
+end
+
 local UiScheduler = RunService.Heartbeat:Connect(function(Delta)
 	local Now = os.clock()
 	local ReadyJobs = {}
@@ -139,7 +173,7 @@ local UiScheduler = RunService.Heartbeat:Connect(function(Delta)
 		end
 	end
 	for _, Job in ReadyJobs do
-		local Success, Error = pcall(Job.Callback)
+		local Success, Error = RunUiCallback(Job.Callback)
 		if not Success then Library.LastUiError = tostring(Error) end
 	end
 
@@ -148,7 +182,7 @@ local UiScheduler = RunService.Heartbeat:Connect(function(Delta)
 		if Updater.Cancelled then
 			table.remove(Library.UiUpdaters, Idx)
 		else
-			local Success, Keep = pcall(Updater.Callback, Delta)
+			local Success, Keep = RunUiCallback(Updater.Callback, Delta)
 			if not Success or Keep == false then
 				table.remove(Library.UiUpdaters, Idx)
 				if not Success then Library.LastUiError = tostring(Keep) end
@@ -261,11 +295,18 @@ function Library:Create(Class, Properties)
 	-- other property first so unordered table iteration cannot lock us out
 	-- halfway through construction.
 	local Parent = Properties.Parent
-	for Property, Value in next, Properties do
-		if Property == "Parent" then continue end
-		_Instance[Property] = Value
+	local function ApplyProperties()
+		for Property, Value in next, Properties do
+			if Property == "Parent" then continue end
+			_Instance[Property] = Value
+		end
+		if Parent ~= nil then _Instance.Parent = Parent end
 	end
-	if Parent ~= nil then _Instance.Parent = Parent end
+	local Applied, ApplyError = pcall(ApplyProperties)
+	if not Applied then
+		Applied, ApplyError = Library:RunUi(ApplyProperties)
+		if not Applied then error(ApplyError, 0) end
+	end
 
 	return _Instance
 end
@@ -544,6 +585,11 @@ function Library:GiveSignal(Signal)
 end
 
 function Library:Unload()
+	if not Library:IsUiThread() then
+		local Success, Error = Library:RunUi(function() Library:Unload() end)
+		if not Success then Library.LastUiError = tostring(Error) end
+		return Success
+	end
 	if Library.Unloaded then return end
 	Library.Unloaded = true
 	table.clear(Library.UiJobs)
@@ -3083,18 +3129,38 @@ do
 end
 
 function Library:SetWatermarkVisibility(Bool)
+	if not Library:IsUiThread() then
+		local Success, Result = Library:RunUi(function() return Library:SetWatermarkVisibility(Bool) end)
+		if Success then return Result end
+		Library.LastUiError = tostring(Result)
+		return false
+	end
 	Library.Watermark.Visible = Bool
+	return true
 end
 
 function Library:SetWatermark(Text)
+	if not Library:IsUiThread() then
+		local Success, Result = Library:RunUi(function() return Library:SetWatermark(Text) end)
+		if Success then return Result end
+		Library.LastUiError = tostring(Result)
+		return false
+	end
 	local X, Y = Library:GetTextBounds(Text, Library.Font, 14)
 	Library.Watermark.Size = UDim2.new(0, X + 15, 0, (Y * 1.5) + 3)
 	Library:SetWatermarkVisibility(true)
 
 	Library.WatermarkText.Text = Text
+	return true
 end
 
 function Library:Notify(Text, Time)
+	if not Library:IsUiThread() then
+		local Success, Result = Library:RunUi(function() return Library:Notify(Text, Time) end)
+		if Success then return Result end
+		Library.LastUiError = tostring(Result)
+		return nil
+	end
 	Text = tostring(Text or "")
 	local ViewportWidth = 800
 	pcall(function()
