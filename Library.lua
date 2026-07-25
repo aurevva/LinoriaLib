@@ -36,6 +36,8 @@ ScreenGui.Parent = gethui()
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
 local _invScale = 1
+local ScaleSignal = nil
+local UpdateScaleCallback = nil
 do
 	local Camera = workspace.CurrentCamera
 	local BaseHeight = 1080
@@ -54,7 +56,8 @@ do
 	end
 
 	UpdateScale()
-	Camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+	ScaleSignal = Camera:GetPropertyChangedSignal("ViewportSize")
+	UpdateScaleCallback = UpdateScale
 end
 
 -- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
@@ -89,6 +92,9 @@ local Library = {
 
 	Signals = {},
 	ScreenGui = ScreenGui,
+	UiJobs = {},
+	UiUpdaters = {},
+	Unloaded = false,
 
 	-- Track all windows for mobile toggle UI functionality
 	Windows = {},
@@ -96,6 +102,74 @@ local Library = {
 	-- Mobile UI lock state
 	CantDragForced = false,
 }
+
+function Library:DelayUi(delaySeconds, callback)
+	if Library.Unloaded then return function() end end
+	local job = {
+		Deadline = os.clock() + math.max(tonumber(delaySeconds) or 0, 0),
+		Callback = callback,
+		Cancelled = false,
+	}
+	table.insert(Library.UiJobs, job)
+	return function()
+		job.Cancelled = true
+	end
+end
+
+function Library:AddUiUpdater(callback)
+	if Library.Unloaded then return function() end end
+	local updater = { Callback = callback, Cancelled = false }
+	table.insert(Library.UiUpdaters, updater)
+	return function()
+		updater.Cancelled = true
+	end
+end
+
+local UiScheduler = RunService.Heartbeat:Connect(function(Delta)
+	local Now = os.clock()
+	local ReadyJobs = {}
+
+	for Idx = #Library.UiJobs, 1, -1 do
+		local Job = Library.UiJobs[Idx]
+		if Job.Cancelled then
+			table.remove(Library.UiJobs, Idx)
+		elseif Now >= Job.Deadline then
+			table.remove(Library.UiJobs, Idx)
+			table.insert(ReadyJobs, 1, Job)
+		end
+	end
+	for _, Job in ReadyJobs do
+		local Success, Error = pcall(Job.Callback)
+		if not Success then Library.LastUiError = tostring(Error) end
+	end
+
+	for Idx = #Library.UiUpdaters, 1, -1 do
+		local Updater = Library.UiUpdaters[Idx]
+		if Updater.Cancelled then
+			table.remove(Library.UiUpdaters, Idx)
+		else
+			local Success, Keep = pcall(Updater.Callback, Delta)
+			if not Success or Keep == false then
+				table.remove(Library.UiUpdaters, Idx)
+				if not Success then Library.LastUiError = tostring(Keep) end
+			end
+		end
+	end
+end)
+table.insert(Library.Signals, UiScheduler)
+
+local function Connect(Signal, Callback)
+	return Signal:Connect(function(...)
+		if Library.Unloaded then return end
+		local Arguments = table.pack(...)
+		Library:DelayUi(0, function()
+			local Success, Error = pcall(Callback, table.unpack(Arguments, 1, Arguments.n))
+			if not Success then Library.LastUiError = tostring(Error) end
+		end)
+	end)
+end
+
+table.insert(Library.Signals, Connect(ScaleSignal, UpdateScaleCallback))
 
 local RainbowStep = 0
 local Hue = 0
@@ -221,8 +295,9 @@ end
 
 function Library:MakeDraggable(Instance, Cutoff)
 	Instance.Active = true
+	local StopDragging = nil
 
-	Instance.InputBegan:Connect(function(Input)
+	Connect(Instance.InputBegan, function(Input)
 		if IsClickInput(Input) then
 			-- Prevent dragging if UI is locked (mobile feature)
 			if Library.UILocked or Library.CantDragForced then
@@ -238,21 +313,20 @@ function Library:MakeDraggable(Instance, Cutoff)
 				return
 			end
 
-			while IsClickHeld() do
-				-- Also check lock state during drag
-				if Library.UILocked or Library.CantDragForced then
-					break
+			if StopDragging then StopDragging() end
+			StopDragging = Library:AddUiUpdater(function()
+				if not IsClickHeld() or Library.UILocked or Library.CantDragForced or not Instance.Parent then
+					StopDragging = nil
+					return false
 				end
-
 				Instance.Position = UDim2.new(
 					0,
 					Mouse.X * _invScale - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
 					0,
 					Mouse.Y * _invScale - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
 				)
-
-				RenderStepped:Wait()
-			end
+				return true
+			end)
 		end
 	end)
 end
@@ -292,8 +366,9 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 	})
 
 	local IsHovering = false
+	local StopFollowing = nil
 
-	HoverInstance.MouseEnter:Connect(function()
+	Connect(HoverInstance.MouseEnter, function()
 		if Library:MouseIsOverOpenedFrame() then
 			return
 		end
@@ -303,20 +378,29 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 		Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) * _invScale, (Mouse.Y + 12) * _invScale)
 		Tooltip.Visible = true
 
-		while IsHovering do
-			RunService.Heartbeat:Wait()
+		if StopFollowing then StopFollowing() end
+		StopFollowing = Library:AddUiUpdater(function()
+			if not IsHovering or not Tooltip.Parent then
+				StopFollowing = nil
+				return false
+			end
 			Tooltip.Position = UDim2.fromOffset((Mouse.X + 15) * _invScale, (Mouse.Y + 12) * _invScale)
-		end
+			return true
+		end)
 	end)
 
-	HoverInstance.MouseLeave:Connect(function()
+	Connect(HoverInstance.MouseLeave, function()
 		IsHovering = false
+		if StopFollowing then
+			StopFollowing()
+			StopFollowing = nil
+		end
 		Tooltip.Visible = false
 	end)
 end
 
 function Library:OnHighlight(HighlightInstance, Instance, Properties, PropertiesDefault)
-	HighlightInstance.MouseEnter:Connect(function()
+	Connect(HighlightInstance.MouseEnter, function()
 		local Reg = Library.RegistryMap[Instance]
 
 		for Property, ColorIdx in next, Properties do
@@ -328,7 +412,7 @@ function Library:OnHighlight(HighlightInstance, Instance, Properties, Properties
 		end
 	end)
 
-	HighlightInstance.MouseLeave:Connect(function()
+	Connect(HighlightInstance.MouseLeave, function()
 		local Reg = Library.RegistryMap[Instance]
 
 		for Property, ColorIdx in next, PropertiesDefault do
@@ -454,6 +538,11 @@ function Library:GiveSignal(Signal)
 end
 
 function Library:Unload()
+	if Library.Unloaded then return end
+	Library.Unloaded = true
+	table.clear(Library.UiJobs)
+	table.clear(Library.UiUpdaters)
+
 	-- Unload all of the signals
 	for Idx = #Library.Signals, 1, -1 do
 		local Connection = table.remove(Library.Signals, Idx)
@@ -472,19 +561,19 @@ function Library:OnUnload(Callback)
 	Library.OnUnload = Callback
 end
 
-Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
+Library:GiveSignal(Connect(ScreenGui.DescendantRemoving, function(Instance)
 	if Library.RegistryMap[Instance] then
 		Library:RemoveFromRegistry(Instance)
 	end
 end))
 
-Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
+Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 	if IsClickInput(Input) then
 		_clickHeld = true
 	end
 end))
 
-Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
+Library:GiveSignal(Connect(InputService.InputEnded, function(Input)
 	if IsClickInput(Input) then
 		_clickHeld = false
 	end
@@ -557,7 +646,7 @@ do
 			Parent = ScreenGui,
 		})
 
-		DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(function()
+		Connect(DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"), function()
 			PickerFrameOuter.Position = UDim2.fromOffset(
 				DisplayFrame.AbsolutePosition.X / _uiScale,
 				DisplayFrame.AbsolutePosition.Y / _uiScale + 18
@@ -817,11 +906,11 @@ do
 				updatingMenuSize = false
 			end
 
-			DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateMenuPosition)
-			ContextMenu.Inner.Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateMenuSize)
+			Connect(DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"), updateMenuPosition)
+			Connect(ContextMenu.Inner.Layout:GetPropertyChangedSignal("AbsoluteContentSize"), updateMenuSize)
 
-			task.spawn(updateMenuPosition)
-			task.spawn(updateMenuSize)
+			updateMenuPosition()
+			updateMenuSize()
 
 			Library:AddToRegistry(ContextMenu.Inner, {
 				BackgroundColor3 = "BackgroundColor",
@@ -853,7 +942,7 @@ do
 
 				Library:OnHighlight(Button, Button, { TextColor3 = "AccentColor" }, { TextColor3 = "FontColor" })
 
-				Button.InputBegan:Connect(function(Input)
+				Connect(Button.InputBegan, function(Input)
 					if not IsClickInput(Input) then
 						return
 					end
@@ -913,7 +1002,7 @@ do
 			Parent = HueSelectorInner,
 		})
 
-		HueBox.FocusLost:Connect(function(enter)
+		Connect(HueBox.FocusLost, function(enter)
 			if enter then
 				local success, result = pcall(Color3.fromHex, HueBox.Text)
 				if success and typeof(result) == "Color3" then
@@ -924,7 +1013,7 @@ do
 			ColorPicker:Display()
 		end)
 
-		RgbBox.FocusLost:Connect(function(enter)
+		Connect(RgbBox.FocusLost, function(enter)
 			if enter then
 				local r, g, b = RgbBox.Text:match("(%d+),%s*(%d+),%s*(%d+)")
 				if r and g and b then
@@ -1000,9 +1089,16 @@ do
 			ColorPicker:Display()
 		end
 
-		SatVibMap.InputBegan:Connect(function(Input)
+		local StopSatVibUpdate = nil
+		Connect(SatVibMap.InputBegan, function(Input)
 			if IsClickInput(Input) then
-				while IsClickHeld() do
+				if StopSatVibUpdate then StopSatVibUpdate() end
+				StopSatVibUpdate = Library:AddUiUpdater(function()
+					if not IsClickHeld() or not SatVibMap.Parent then
+						StopSatVibUpdate = nil
+						Library:AttemptSave()
+						return false
+					end
 					local MinX = SatVibMap.AbsolutePosition.X
 					local MaxX = MinX + SatVibMap.AbsoluteSize.X
 					local MouseX = math.clamp(Mouse.X, MinX, MaxX)
@@ -1014,32 +1110,33 @@ do
 					ColorPicker.Sat = (MouseX - MinX) / (MaxX - MinX)
 					ColorPicker.Vib = 1 - ((MouseY - MinY) / (MaxY - MinY))
 					ColorPicker:Display()
-
-					RenderStepped:Wait()
-				end
-
-				Library:AttemptSave()
+					return true
+				end)
 			end
 		end)
 
-		HueSelectorInner.InputBegan:Connect(function(Input)
+		local StopHueUpdate = nil
+		Connect(HueSelectorInner.InputBegan, function(Input)
 			if IsClickInput(Input) then
-				while IsClickHeld() do
+				if StopHueUpdate then StopHueUpdate() end
+				StopHueUpdate = Library:AddUiUpdater(function()
+					if not IsClickHeld() or not HueSelectorInner.Parent then
+						StopHueUpdate = nil
+						Library:AttemptSave()
+						return false
+					end
 					local MinY = HueSelectorInner.AbsolutePosition.Y
 					local MaxY = MinY + HueSelectorInner.AbsoluteSize.Y
 					local MouseY = math.clamp(Mouse.Y, MinY, MaxY)
 
 					ColorPicker.Hue = ((MouseY - MinY) / (MaxY - MinY))
 					ColorPicker:Display()
-
-					RenderStepped:Wait()
-				end
-
-				Library:AttemptSave()
+					return true
+				end)
 			end
 		end)
 
-		DisplayFrame.InputBegan:Connect(function(Input)
+		Connect(DisplayFrame.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
 				if PickerFrameOuter.Visible then
 					ColorPicker:Hide()
@@ -1054,9 +1151,16 @@ do
 		end)
 
 		if TransparencyBoxInner then
-			TransparencyBoxInner.InputBegan:Connect(function(Input)
+			local StopTransparencyUpdate = nil
+			Connect(TransparencyBoxInner.InputBegan, function(Input)
 				if IsClickInput(Input) then
-					while IsClickHeld() do
+					if StopTransparencyUpdate then StopTransparencyUpdate() end
+					StopTransparencyUpdate = Library:AddUiUpdater(function()
+						if not IsClickHeld() or not TransparencyBoxInner.Parent then
+							StopTransparencyUpdate = nil
+							Library:AttemptSave()
+							return false
+						end
 						local MinX = TransparencyBoxInner.AbsolutePosition.X
 						local MaxX = MinX + TransparencyBoxInner.AbsoluteSize.X
 						local MouseX = math.clamp(Mouse.X, MinX, MaxX)
@@ -1064,16 +1168,13 @@ do
 						ColorPicker.Transparency = 1 - ((MouseX - MinX) / (MaxX - MinX))
 
 						ColorPicker:Display()
-
-						RenderStepped:Wait()
-					end
-
-					Library:AttemptSave()
+						return true
+					end)
 				end
 			end)
 		end
 
-		Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
+		Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 			if IsClickInput(Input) then
 				local AbsPos, AbsSize = PickerFrameOuter.AbsolutePosition, PickerFrameOuter.AbsoluteSize
 
@@ -1174,7 +1275,7 @@ do
 			Parent = ScreenGui,
 		})
 
-		ToggleLabel:GetPropertyChangedSignal("AbsolutePosition"):Connect(function()
+		Connect(ToggleLabel:GetPropertyChangedSignal("AbsolutePosition"), function()
 			ModeSelectOuter.Position = UDim2.fromOffset(
 				(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X) / _uiScale + 4,
 				ToggleLabel.AbsolutePosition.Y / _uiScale + 1
@@ -1245,7 +1346,7 @@ do
 				Library.RegistryMap[Label].Properties.TextColor3 = "FontColor"
 			end
 
-			Label.InputBegan:Connect(function(Input)
+			Connect(Label.InputBegan, function(Input)
 				if IsClickInput(Input) then
 					ModeButton:Select()
 					Library:AttemptSave()
@@ -1346,62 +1447,65 @@ do
 		end
 
 		local Picking = false
+		local StopPickingAnimation = nil
+		local CaptureEvent = nil
 
-		PickOuter.InputBegan:Connect(function(Input)
+		Connect(PickOuter.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+				if Picking then return end
 				Picking = true
+				DisplayLabel.Text = "."
+				local AnimationStarted = os.clock()
+				local AcceptInputAfter = AnimationStarted + 0.15
 
-				DisplayLabel.Text = ""
-
-				local Break
-				local Text = ""
-
-				task.spawn(function()
-					while not Break do
-						if Text == "..." then
-							Text = ""
-						end
-
-						Text = Text .. "."
-						DisplayLabel.Text = Text
-
-						wait(0.4)
+				if StopPickingAnimation then StopPickingAnimation() end
+				StopPickingAnimation = Library:AddUiUpdater(function()
+					if not Picking or not DisplayLabel.Parent then
+						StopPickingAnimation = nil
+						return false
 					end
+					local DotCount = (math.floor((os.clock() - AnimationStarted) / 0.4) % 3) + 1
+					DisplayLabel.Text = string.rep(".", DotCount)
+					return true
 				end)
 
-				wait(0.2)
-
-				local Event
-				Event = InputService.InputBegan:Connect(function(Input)
+				CaptureEvent = Connect(InputService.InputBegan, function(NewInput)
+					if os.clock() < AcceptInputAfter then return end
 					local Key
 
-					if Input.UserInputType == Enum.UserInputType.Keyboard then
-						Key = Input.KeyCode.Name
-					elseif Input.UserInputType == Enum.UserInputType.MouseButton1 then
+					if NewInput.UserInputType == Enum.UserInputType.Keyboard then
+						Key = NewInput.KeyCode.Name
+					elseif NewInput.UserInputType == Enum.UserInputType.MouseButton1 then
 						Key = "MB1"
-					elseif Input.UserInputType == Enum.UserInputType.MouseButton2 then
+					elseif NewInput.UserInputType == Enum.UserInputType.MouseButton2 then
 						Key = "MB2"
 					end
+					if not Key then return end
 
-					Break = true
 					Picking = false
+					if StopPickingAnimation then
+						StopPickingAnimation()
+						StopPickingAnimation = nil
+					end
 
 					DisplayLabel.Text = Key
 					KeyPicker.Value = Key
 
-					Library:SafeCallback(KeyPicker.ChangedCallback, Input.KeyCode or Input.UserInputType)
-					Library:SafeCallback(KeyPicker.Changed, Input.KeyCode or Input.UserInputType)
+					Library:SafeCallback(KeyPicker.ChangedCallback, NewInput.KeyCode or NewInput.UserInputType)
+					Library:SafeCallback(KeyPicker.Changed, NewInput.KeyCode or NewInput.UserInputType)
 
 					Library:AttemptSave()
 
-					Event:Disconnect()
+					CaptureEvent:Disconnect()
+					CaptureEvent = nil
 				end)
+				Library:GiveSignal(CaptureEvent)
 			elseif Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame() then
 				ModeSelectOuter.Visible = true
 			end
 		end)
 
-		Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
+		Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 			if not Picking then
 				if KeyPicker.Mode == "Toggle" then
 					local Key = KeyPicker.Value
@@ -1439,7 +1543,7 @@ do
 			end
 		end))
 
-		Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
+		Library:GiveSignal(Connect(InputService.InputEnded, function(Input)
 			if not Picking then
 				KeyPicker:Update()
 			end
@@ -1606,22 +1710,6 @@ do
 		end
 
 		local function InitEvents(Button)
-			local function WaitForEvent(event, timeout, validator)
-				local bindable = Instance.new("BindableEvent")
-				local connection = event:Once(function(...)
-					if type(validator) == "function" and validator(...) then
-						bindable:Fire(true)
-					else
-						bindable:Fire(false)
-					end
-				end)
-				task.delay(timeout, function()
-					connection:disconnect()
-					bindable:Fire(false)
-				end)
-				return bindable.Event:Wait()
-			end
-
 			local function ValidateClick(Input)
 				if Library:MouseIsOverOpenedFrame() then
 					return false
@@ -1634,34 +1722,45 @@ do
 				return true
 			end
 
-			Button.Outer.InputBegan:Connect(function(Input)
+			local Confirming = false
+			local ConfirmationVersion = 0
+			local function ResetConfirmation()
+				Confirming = false
+				Button.Locked = false
+				Library:RemoveFromRegistry(Button.Label)
+				Library:AddToRegistry(Button.Label, { TextColor3 = "FontColor" })
+				Button.Label.TextColor3 = Library.FontColor
+				Button.Label.Text = Button.Text
+			end
+
+			Connect(Button.Outer.InputBegan, function(Input)
 				if not ValidateClick(Input) then
 					return
 				end
-				if Button.Locked then
+				if Button.Locked and not Confirming then
 					return
 				end
 
 				if Button.DoubleClick then
+					if Confirming then
+						ConfirmationVersion += 1
+						ResetConfirmation()
+						Library:SafeCallback(Button.Func)
+						return
+					end
+
 					Library:RemoveFromRegistry(Button.Label)
 					Library:AddToRegistry(Button.Label, { TextColor3 = "AccentColor" })
 
 					Button.Label.TextColor3 = Library.AccentColor
 					Button.Label.Text = "Are you sure?"
 					Button.Locked = true
-
-					local clicked = WaitForEvent(Button.Outer.InputBegan, 0.5, ValidateClick)
-
-					Library:RemoveFromRegistry(Button.Label)
-					Library:AddToRegistry(Button.Label, { TextColor3 = "FontColor" })
-
-					Button.Label.TextColor3 = Library.FontColor
-					Button.Label.Text = Button.Text
-					task.defer(rawset, Button, "Locked", false)
-
-					if clicked then
-						Library:SafeCallback(Button.Func)
-					end
+					Confirming = true
+					ConfirmationVersion += 1
+					local CurrentVersion = ConfirmationVersion
+					Library:DelayUi(0.5, function()
+						if Confirming and CurrentVersion == ConfirmationVersion then ResetConfirmation() end
+					end)
 
 					return
 				end
@@ -1873,7 +1972,7 @@ do
 		end
 
 		if Textbox.Finished then
-			Box.FocusLost:Connect(function(enter)
+			Connect(Box.FocusLost, function(enter)
 				if not enter then
 					return
 				end
@@ -1882,7 +1981,7 @@ do
 				Library:AttemptSave()
 			end)
 		else
-			Box:GetPropertyChangedSignal("Text"):Connect(function()
+			Connect(Box:GetPropertyChangedSignal("Text"), function()
 				Textbox:SetValue(Box.Text)
 				Library:AttemptSave()
 			end)
@@ -1920,12 +2019,12 @@ do
 			end
 		end
 
-		task.spawn(Update)
+		Update()
 
-		Box:GetPropertyChangedSignal("Text"):Connect(Update)
-		Box:GetPropertyChangedSignal("CursorPosition"):Connect(Update)
-		Box.FocusLost:Connect(Update)
-		Box.Focused:Connect(Update)
+		Connect(Box:GetPropertyChangedSignal("Text"), Update)
+		Connect(Box:GetPropertyChangedSignal("CursorPosition"), Update)
+		Connect(Box.FocusLost, Update)
+		Connect(Box.Focused, Update)
 
 		Library:AddToRegistry(Box, {
 			TextColor3 = "FontColor",
@@ -2052,7 +2151,7 @@ do
 			Library:UpdateDependencyBoxes()
 		end
 
-		ToggleRegion.InputBegan:Connect(function(Input)
+		Connect(ToggleRegion.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
 				Toggle:SetValue(not Toggle.Value) -- Why was it not like this from the start?
 				Library:AttemptSave()
@@ -2241,13 +2340,20 @@ do
 			Library:SafeCallback(Slider.Changed, Slider.Value)
 		end
 
-		SliderInner.InputBegan:Connect(function(Input)
+		local StopSliderUpdate = nil
+		Connect(SliderInner.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
 				local mPos = Mouse.X * _invScale
 				local gPos = Fill.Size.X.Offset
 				local Diff = mPos - (Fill.AbsolutePosition.X * _invScale + gPos)
 
-				while IsClickHeld() do
+				if StopSliderUpdate then StopSliderUpdate() end
+				StopSliderUpdate = Library:AddUiUpdater(function()
+					if not IsClickHeld() or not SliderInner.Parent then
+						StopSliderUpdate = nil
+						Library:AttemptSave()
+						return false
+					end
 					local nMPos = Mouse.X * _invScale
 					local nX = math.clamp(gPos + (nMPos - mPos) + Diff, 0, Slider.MaxSize)
 
@@ -2261,11 +2367,8 @@ do
 						Library:SafeCallback(Slider.Callback, Slider.Value)
 						Library:SafeCallback(Slider.Changed, Slider.Value)
 					end
-
-					RenderStepped:Wait()
-				end
-
-				Library:AttemptSave()
+					return true
+				end)
 			end
 		end)
 
@@ -2418,7 +2521,7 @@ do
 		RecalculateListPosition()
 		RecalculateListSize()
 
-		DropdownOuter:GetPropertyChangedSignal("AbsolutePosition"):Connect(RecalculateListPosition)
+		Connect(DropdownOuter:GetPropertyChangedSignal("AbsolutePosition"), RecalculateListPosition)
 
 		local ListInner = Library:Create("Frame", {
 			BackgroundColor3 = Library.MainColor,
@@ -2563,7 +2666,7 @@ do
 					Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Selected and "AccentColor" or "FontColor"
 				end
 
-				ButtonLabel.InputBegan:Connect(function(Input)
+				Connect(ButtonLabel.InputBegan, function(Input)
 					if IsClickInput(Input) then
 						local Try = not Selected
 
@@ -2664,7 +2767,7 @@ do
 			Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
 		end
 
-		DropdownOuter.InputBegan:Connect(function(Input)
+		Connect(DropdownOuter.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
 				if ListOuter.Visible then
 					Dropdown:CloseDropdown()
@@ -2674,7 +2777,7 @@ do
 			end
 		end)
 
-		InputService.InputBegan:Connect(function(Input)
+		Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 			if IsClickInput(Input) then
 				local AbsPos, AbsSize = ListOuter.AbsolutePosition, ListOuter.AbsoluteSize
 
@@ -2687,7 +2790,7 @@ do
 					Dropdown:CloseDropdown()
 				end
 			end
-		end)
+		end))
 
 		Dropdown:BuildDropdownList()
 		Dropdown:Display()
@@ -2769,11 +2872,11 @@ do
 			Groupbox:Resize()
 		end
 
-		Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		Connect(Layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
 			Depbox:Resize()
 		end)
 
-		Holder:GetPropertyChangedSignal("Visible"):Connect(function()
+		Connect(Holder:GetPropertyChangedSignal("Visible"), function()
 			Depbox:Resize()
 		end)
 
@@ -2824,7 +2927,7 @@ do
 	Library.NotificationArea = Library:Create("Frame", {
 		BackgroundTransparency = 1,
 		Position = UDim2.new(0, 0, 0, 40),
-		Size = UDim2.new(0, 300, 0, 200),
+		Size = UDim2.new(0, 440, 1, -80),
 		ZIndex = 100,
 		Parent = ScreenGui,
 	})
@@ -2986,9 +3089,17 @@ function Library:SetWatermark(Text)
 end
 
 function Library:Notify(Text, Time)
-	local XSize, YSize = Library:GetTextBounds(Text, Library.Font, 14)
-
-	YSize = YSize + 7
+	Text = tostring(Text or "")
+	local ViewportWidth = 800
+	pcall(function()
+		ViewportWidth = workspace.CurrentCamera.ViewportSize.X * _invScale
+	end)
+	local MaxWidth = math.clamp(ViewportWidth - 30, 220, 420)
+	local TextBounds = TextService:GetTextSize(Text, 14, Library.Font, Vector2.new(MaxWidth - 20, 10000))
+	local XSize = math.clamp(TextBounds.X + 20, 140, MaxWidth)
+	local YSize = math.max(TextBounds.Y + 10, 26)
+	local ReadTime = math.min(12, 2.5 + (#Text / 32) + math.max(0, YSize - 26) / 24)
+	local DisplayTime = math.max(tonumber(Time) or 5, ReadTime)
 
 	local NotifyOuter = Library:Create("Frame", {
 		BorderColor3 = Color3.new(0, 0, 0),
@@ -3041,10 +3152,13 @@ function Library:Notify(Text, Time)
 	})
 
 	local NotifyLabel = Library:CreateLabel({
-		Position = UDim2.new(0, 4, 0, 0),
-		Size = UDim2.new(1, -4, 1, 0),
+		Position = UDim2.new(0, 8, 0, 4),
+		Size = UDim2.new(1, -12, 1, -8),
 		Text = Text,
+		TextSize = 14,
+		TextWrapped = true,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
 		ZIndex = 103,
 		Parent = InnerFrame,
 	})
@@ -3062,17 +3176,25 @@ function Library:Notify(Text, Time)
 		BackgroundColor3 = "AccentColor",
 	}, true)
 
-	pcall(NotifyOuter.TweenSize, NotifyOuter, UDim2.new(0, XSize + 8 + 4, 0, YSize), "Out", "Quad", 0.4, true)
+	TweenService:Create(
+		NotifyOuter,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = UDim2.new(0, XSize, 0, YSize) }
+	):Play()
 
-	task.spawn(function()
-		wait(Time or 5)
-
-		pcall(NotifyOuter.TweenSize, NotifyOuter, UDim2.new(0, 0, 0, YSize), "Out", "Quad", 0.4, true)
-
-		wait(0.4)
-
-		NotifyOuter:Destroy()
+	Library:DelayUi(DisplayTime, function()
+		if not NotifyOuter.Parent then return end
+		TweenService:Create(
+			NotifyOuter,
+			TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{ Size = UDim2.new(0, 0, 0, YSize) }
+		):Play()
+		Library:DelayUi(0.25, function()
+			if NotifyOuter.Parent then NotifyOuter:Destroy() end
+		end)
 	end)
+
+	return NotifyOuter
 end
 
 function Library:CreateWindow(...)
@@ -3317,7 +3439,7 @@ function Library:CreateWindow(...)
 		})
 
 		for _, Side in next, { LeftSide, RightSide } do
-			Side:WaitForChild("UIListLayout"):GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			Connect(Side:WaitForChild("UIListLayout"):GetPropertyChangedSignal("AbsoluteContentSize"), function()
 				Side.CanvasSize = UDim2.fromOffset(0, Side.UIListLayout.AbsoluteContentSize.Y)
 			end)
 		end
@@ -3606,7 +3728,7 @@ function Library:CreateWindow(...)
 					BoxOuter.Size = UDim2.new(1, 0, 0, 20 + Size + 2 + 2)
 				end
 
-				Button.InputBegan:Connect(function(Input)
+				Connect(Button.InputBegan, function(Input)
 					if IsClickInput(Input) then
 						Tab:Show()
 						Tab:Resize()
@@ -3642,7 +3764,7 @@ function Library:CreateWindow(...)
 			return Tab:AddTabbox({ Name = Name, Side = 2 })
 		end
 
-		TabButton.InputBegan:Connect(function(Input)
+		Connect(TabButton.InputBegan, function(Input)
 			if IsClickInput(Input) then
 				Tab:ShowTab()
 			end
@@ -3723,30 +3845,30 @@ function Library:CreateWindow(...)
 			end
 		end
 
-		task.wait(FadeTime)
-
-		Outer.Visible = Toggled
-
-		Fading = false
+		local ExpectedVisibility = Toggled
+		Library:DelayUi(FadeTime, function()
+			if Outer.Parent then Outer.Visible = ExpectedVisibility end
+			Fading = false
+		end)
 	end
 
-	Library:GiveSignal(InputService.InputBegan:Connect(function(Input, Processed)
+	Library:GiveSignal(Connect(InputService.InputBegan, function(Input, Processed)
 		if type(Library.ToggleKeybind) == "table" and Library.ToggleKeybind.Type == "KeyPicker" then
 			if
 				Input.UserInputType == Enum.UserInputType.Keyboard
 				and Input.KeyCode.Name == Library.ToggleKeybind.Value
 			then
-				task.spawn(Library.Toggle)
+				Library:Toggle()
 			end
 		elseif
 			Input.KeyCode == Enum.KeyCode.RightControl or (Input.KeyCode == Enum.KeyCode.RightShift and not Processed)
 		then
-			task.spawn(Library.Toggle)
+			Library:Toggle()
 		end
 	end))
 
 	if Config.AutoShow then
-		task.spawn(Library.Toggle)
+		Library:DelayUi(0, Library.Toggle)
 	end
 
 	-- Mobile sidebar (Toggle UI / Lock UI) - combined into one frame
@@ -3844,11 +3966,11 @@ function Library:CreateWindow(...)
 		-- Initialize CantDragForced state
 		Library.CantDragForced = false
 
-		ToggleUIButton.MouseButton1Down:Connect(function()
+		Connect(ToggleUIButton.MouseButton1Down, function()
 			Library:Toggle()
 		end)
 
-		LockUIButton.MouseButton1Down:Connect(function()
+		Connect(LockUIButton.MouseButton1Down, function()
 			Library.CantDragForced = not Library.CantDragForced
 
 			-- Update button text to show state
@@ -3879,8 +4001,8 @@ local function OnPlayerChange()
 	end
 end
 
-Players.PlayerAdded:Connect(OnPlayerChange)
-Players.PlayerRemoving:Connect(OnPlayerChange)
+Library:GiveSignal(Connect(Players.PlayerAdded, OnPlayerChange))
+Library:GiveSignal(Connect(Players.PlayerRemoving, OnPlayerChange))
 
 getgenv().Library = Library
 return Library
