@@ -13,6 +13,9 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local SetThreadIdentity = setthreadidentity or setidentity or setthreadcontext
 local GetThreadIdentity = getthreadidentity or getidentity or getthreadcontext
+local SetHiddenProperty = sethiddenproperty or sethiddenprop
+local SetScriptable = setscriptable
+local ProtectGui = protectgui or (syn and syn.protect_gui)
 
 local IsMobile = InputService.TouchEnabled and not InputService.MouseEnabled
 
@@ -36,7 +39,27 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 local MountThread = coroutine.create(function()
 	local GuiParent = gethui()
 	coroutine.yield()
-	ScreenGui.Parent = GuiParent
+	local Errors = {}
+	local function Attempt(label, callback)
+		local Success, Result = pcall(callback)
+		if Success then return true end
+		table.insert(Errors, `{label}: {tostring(Result)}`)
+		return false
+	end
+
+	if Attempt("Parent", function() ScreenGui.Parent = GuiParent end) then return end
+	if typeof(SetHiddenProperty) == "function"
+		and Attempt("sethiddenproperty", function() SetHiddenProperty(ScreenGui, "Parent", GuiParent) end)
+	then return end
+	if typeof(SetScriptable) == "function" then
+		pcall(SetScriptable, ScreenGui, "Parent", true)
+		if Attempt("setscriptable Parent", function() ScreenGui.Parent = GuiParent end) then return end
+	end
+	if typeof(ProtectGui) == "function" then
+		pcall(ProtectGui, ScreenGui)
+		if Attempt("protect_gui Parent", function() ScreenGui.Parent = GuiParent end) then return end
+	end
+	error(table.concat(Errors, " | "), 0)
 end)
 local MountThreadReady, MountThreadError = coroutine.resume(MountThread)
 
