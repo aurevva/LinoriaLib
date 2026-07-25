@@ -31,7 +31,6 @@ local function IsClickHeld()
 end
 
 local ScreenGui = Instance.new("ScreenGui")
-local GuiParent = gethui()
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 
@@ -175,7 +174,7 @@ function Library:Mount()
 	if Library.Mounted then return true end
 	if Library.Unloaded then return false, "library is unloaded" end
 	local Mounted, MountError = pcall(function()
-		ScreenGui.Parent = GuiParent
+		ScreenGui.Parent = gethui()
 	end)
 	if not Mounted then
 		Library.LastUiError = tostring(MountError)
