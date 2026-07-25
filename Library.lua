@@ -127,6 +127,9 @@ local Library = {
 	UiThreads = setmetatable({}, { __mode = "k" }),
 	Mounted = false,
 	Unloaded = false,
+	CursorRegions = setmetatable({}, { __mode = "k" }),
+	CursorOverrideActive = false,
+	CursorRestore = nil,
 
 	-- Track all windows for mobile toggle UI functionality
 	Windows = {},
@@ -257,6 +260,45 @@ local function Connect(Signal, Callback)
 	end)
 end
 
+local DefaultCursorIcon = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
+
+function Library:SetCursorOverride(enabled)
+	enabled = enabled == true
+	if enabled then
+		if not Library.CursorOverrideActive then
+			local restore = {}
+			pcall(function() restore.MouseIconEnabled = InputService.MouseIconEnabled end)
+			pcall(function() restore.MouseBehavior = InputService.MouseBehavior end)
+			pcall(function() restore.Icon = Mouse.Icon end)
+			Library.CursorRestore = restore
+			Library.CursorOverrideActive = true
+		end
+		pcall(function() InputService.MouseIconEnabled = true end)
+		pcall(function() InputService.MouseBehavior = Enum.MouseBehavior.Default end)
+		pcall(function() Mouse.Icon = DefaultCursorIcon end)
+		return
+	end
+
+	if not Library.CursorOverrideActive then return end
+	local restore = Library.CursorRestore or {}
+	if restore.MouseIconEnabled ~= nil then pcall(function() InputService.MouseIconEnabled = restore.MouseIconEnabled end) end
+	if restore.MouseBehavior ~= nil then pcall(function() InputService.MouseBehavior = restore.MouseBehavior end) end
+	if restore.Icon ~= nil then pcall(function() Mouse.Icon = restore.Icon end) end
+	Library.CursorOverrideActive = false
+	Library.CursorRestore = nil
+end
+
+function Library:RegisterCursorRegion(region)
+	if not region or Library.CursorRegions[region] ~= nil then return end
+	Library.CursorRegions[region] = false
+	table.insert(Library.Signals, Connect(region.MouseEnter, function()
+		Library.CursorRegions[region] = true
+	end))
+	table.insert(Library.Signals, Connect(region.MouseLeave, function()
+		Library.CursorRegions[region] = false
+	end))
+end
+
 table.insert(Library.Signals, Connect(ScaleSignal, UpdateScaleCallback))
 
 local RainbowStep = 0
@@ -265,6 +307,16 @@ local Hue = 0
 table.insert(
 	Library.Signals,
 	RenderStepped:Connect(function(Delta)
+		local cursorHovered = false
+		for region, hovered in Library.CursorRegions do
+			if not region.Parent then
+				Library.CursorRegions[region] = nil
+			elseif hovered and region.Visible then
+				cursorHovered = true
+			end
+		end
+		Library:SetCursorOverride(cursorHovered)
+
 		RainbowStep = RainbowStep + Delta
 
 		if RainbowStep >= (1 / 60) then
@@ -647,6 +699,8 @@ function Library:Unload()
 	if Library.Unloaded then return end
 	Library.Unloaded = true
 	Library.Mounted = false
+	Library:SetCursorOverride(false)
+	table.clear(Library.CursorRegions)
 	table.clear(Library.UiJobs)
 	table.clear(Library.UiUpdaters)
 
@@ -752,6 +806,7 @@ do
 			ZIndex = 15,
 			Parent = ScreenGui,
 		})
+		Library:RegisterCursorRegion(PickerFrameOuter)
 
 		Connect(DisplayFrame:GetPropertyChangedSignal("AbsolutePosition"), function()
 			PickerFrameOuter.Position = UDim2.fromOffset(
@@ -1381,6 +1436,7 @@ do
 			ZIndex = 14,
 			Parent = ScreenGui,
 		})
+		Library:RegisterCursorRegion(ModeSelectOuter)
 
 		Connect(ToggleLabel:GetPropertyChangedSignal("AbsolutePosition"), function()
 			ModeSelectOuter.Position = UDim2.fromOffset(
@@ -2612,6 +2668,7 @@ do
 			Visible = false,
 			Parent = ScreenGui,
 		})
+		Library:RegisterCursorRegion(ListOuter)
 
 		local function RecalculateListPosition()
 			ListOuter.Position = UDim2.fromOffset(
@@ -3381,6 +3438,7 @@ function Library:CreateWindow(...)
 		ZIndex = 1,
 		Parent = ScreenGui,
 	})
+	Library:RegisterCursorRegion(Outer)
 
 	Library:MakeDraggable(Outer, 25)
 
