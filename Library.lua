@@ -257,9 +257,15 @@ function Library:Create(Class, Properties)
 		_Instance = Instance.new(Class)
 	end
 
+	-- Parenting into gethui protects the instance immediately. Apply every
+	-- other property first so unordered table iteration cannot lock us out
+	-- halfway through construction.
+	local Parent = Properties.Parent
 	for Property, Value in next, Properties do
+		if Property == "Parent" then continue end
 		_Instance[Property] = Value
 	end
+	if Parent ~= nil then _Instance.Parent = Parent end
 
 	return _Instance
 end
