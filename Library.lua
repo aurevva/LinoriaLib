@@ -11,6 +11,8 @@ local TweenService = game:GetService("TweenService")
 local RenderStepped = RunService.RenderStepped
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
+local SetThreadIdentity = setthreadidentity or setidentity or setthreadcontext
+local GetThreadIdentity = getthreadidentity or getidentity or getthreadcontext
 
 local IsMobile = InputService.TouchEnabled and not InputService.MouseEnabled
 
@@ -128,9 +130,18 @@ end
 
 local function RunUiCallback(Callback, ...)
 	local Thread = coroutine.running()
+	local PreviousIdentity = nil
+	if typeof(GetThreadIdentity) == "function" then
+		local ReadIdentity, Identity = pcall(GetThreadIdentity)
+		if ReadIdentity and typeof(Identity) == "number" then PreviousIdentity = Identity end
+	end
+	if typeof(SetThreadIdentity) == "function" then pcall(SetThreadIdentity, 8) end
 	if Thread then Library.UiThreads[Thread] = true end
 	local Results = table.pack(pcall(Callback, ...))
 	if Thread then Library.UiThreads[Thread] = nil end
+	if PreviousIdentity ~= nil and typeof(SetThreadIdentity) == "function" then
+		pcall(SetThreadIdentity, PreviousIdentity)
+	end
 	return table.unpack(Results, 1, Results.n)
 end
 
