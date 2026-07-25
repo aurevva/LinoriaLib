@@ -4,7 +4,6 @@
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
-local CoreGui = game:GetService("CoreGui")
 local Teams = game:GetService("Teams")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -29,13 +28,13 @@ local function IsClickHeld()
 	return _clickHeld or InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 end
 
-local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
-
 local ScreenGui = Instance.new("ScreenGui")
-ProtectGui(ScreenGui)
-
+ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-ScreenGui.Parent = CoreGui
+-- CoreGui/gethui descendants can become inaccessible when executor callbacks
+-- resume without the Plugin capability. PlayerGui keeps every Linoria callback
+-- on the normal client capability path instead of fixing each property access.
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
