@@ -31,9 +31,9 @@ local function IsClickHeld()
 end
 
 local ScreenGui = Instance.new("ScreenGui")
+local GuiParent = gethui()
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-ScreenGui.Parent = gethui()
 
 -- Auto-scale UI for different resolutions (reference: 1080p)
 local _uiScale = 1
@@ -97,6 +97,7 @@ local Library = {
 	UiJobs = {},
 	UiUpdaters = {},
 	UiThreads = setmetatable({}, { __mode = "k" }),
+	Mounted = false,
 	Unloaded = false,
 
 	-- Track all windows for mobile toggle UI functionality
@@ -168,6 +169,20 @@ function Library:RunUi(Callback, ...)
 		RunService.Heartbeat:Wait()
 	end
 	return table.unpack(Results, 1, Results.n)
+end
+
+function Library:Mount()
+	if Library.Mounted then return true end
+	if Library.Unloaded then return false, "library is unloaded" end
+	local Mounted, MountError = pcall(function()
+		ScreenGui.Parent = GuiParent
+	end)
+	if not Mounted then
+		Library.LastUiError = tostring(MountError)
+		return false, MountError
+	end
+	Library.Mounted = true
+	return true
 end
 
 local UiScheduler = RunService.Heartbeat:Connect(function(Delta)
@@ -603,6 +618,7 @@ function Library:Unload()
 	end
 	if Library.Unloaded then return end
 	Library.Unloaded = true
+	Library.Mounted = false
 	table.clear(Library.UiJobs)
 	table.clear(Library.UiUpdaters)
 
