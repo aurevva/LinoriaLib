@@ -739,6 +739,7 @@ end
 function Library:AddToolTip(InfoStr, HoverInstance)
 	local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14)
 	local Tooltip = Library:Create("Frame", {
+		Active = false,
 		BackgroundColor3 = Library.MainColor,
 		BorderColor3 = Library.OutlineColor,
 
@@ -772,6 +773,24 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
 	local IsHovering = false
 	local StopFollowing = nil
+	local function PositionAbovePointer()
+		local Pointer = GetPointerPosition()
+		local PointerX = Pointer.X * _invScale
+		local PointerY = Pointer.Y * _invScale
+		local TooltipWidth = Tooltip.Size.X.Offset
+		local TooltipHeight = Tooltip.Size.Y.Offset
+		local Gap = 10
+		local XPos = PointerX - TooltipWidth * 0.5
+		local YPos = PointerY - TooltipHeight - Gap
+		local _, TopInset = GetViewportInsets()
+
+		-- Keep the tooltip away from the cursor; only fall below it at the top edge.
+		if YPos < TopInset + 6 then
+			YPos = PointerY + Gap + 4
+		end
+		XPos, YPos = Library:ClampPopupOffset(XPos, YPos, TooltipWidth, TooltipHeight)
+		Tooltip.Position = UDim2.fromOffset(XPos, YPos)
+	end
 
 	Connect(HoverInstance.MouseEnter, function()
 		if Library:MouseIsOverOpenedFrame() then
@@ -779,15 +798,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 		end
 
 		IsHovering = true
-
-		local Pointer = GetPointerPosition()
-		local XPos, YPos = Library:ClampPopupOffset(
-			(Pointer.X + 15) * _invScale,
-			(Pointer.Y + 12) * _invScale,
-			Tooltip.Size.X.Offset,
-			Tooltip.Size.Y.Offset
-		)
-		Tooltip.Position = UDim2.fromOffset(XPos, YPos)
+		PositionAbovePointer()
 		Tooltip.Visible = true
 
 		if StopFollowing then StopFollowing() end
@@ -797,14 +808,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 				StopFollowing = nil
 				return false
 			end
-			local Pointer = GetPointerPosition()
-			local FollowX, FollowY = Library:ClampPopupOffset(
-				(Pointer.X + 15) * _invScale,
-				(Pointer.Y + 12) * _invScale,
-				Tooltip.Size.X.Offset,
-				Tooltip.Size.Y.Offset
-			)
-			Tooltip.Position = UDim2.fromOffset(FollowX, FollowY)
+			PositionAbovePointer()
 			return true
 		end)
 	end)
@@ -4111,8 +4115,9 @@ function Library:CreateWindow(...)
 		Config.TabPadding = 0
 	end
 	if type(Config.MenuFadeTime) ~= "number" then
-		Config.MenuFadeTime = 0.2
+		Config.MenuFadeTime = 0.28
 	end
+	Config.MenuFadeTime = math.max(Config.MenuFadeTime, 0)
 
 	local HasConfiguredPosition = typeof(Config.Position) == "UDim2"
 	if not HasConfiguredPosition then
@@ -4934,6 +4939,19 @@ function Library:CreateWindow(...)
 
 	local Toggled = false
 	local Fading = false
+	local FadeGeneration = 0
+	local FadeTween = nil
+	local MoveTween = nil
+	local CancelFadeCleanup = nil
+	local RestingPosition = Outer.Position
+	local function OffsetPosition(Position, X, Y)
+		return UDim2.new(
+			Position.X.Scale,
+			Position.X.Offset + X,
+			Position.Y.Scale,
+			Position.Y.Offset + Y
+		)
+	end
 
 	function Window:Toggle()
 		if Library.Unloaded or not Outer.Parent then return false end
@@ -4943,31 +4961,60 @@ function Library:CreateWindow(...)
 			Library.LastUiError = tostring(Result)
 			return false
 		end
-		if Fading then
-			return false
-		end
-
 		local FadeTime = Config.MenuFadeTime
+		local WasFading = Fading
+		local WasToggled = Toggled
+		FadeGeneration += 1
+		local Generation = FadeGeneration
 		Fading = true
 		Toggled = not Toggled
 		ModalElement.Modal = Toggled
+		if CancelFadeCleanup then
+			CancelFadeCleanup()
+			CancelFadeCleanup = nil
+		end
+		if FadeTween then FadeTween:Cancel() end
+		if MoveTween then MoveTween:Cancel() end
 
 		if Toggled then
-			-- A bit scuffed, but if we're going from not toggled -> toggled we want to show the frame immediately so that the fade is visible.
 			Outer.Visible = true
+			if not WasFading and not WasToggled then
+				RestingPosition = Outer.Position
+				Outer.GroupTransparency = 1
+				Outer.Position = OffsetPosition(RestingPosition, 0, 7)
+			end
 		else
+			if not WasFading and WasToggled then
+				RestingPosition = Outer.Position
+			end
 			Library:ClosePopupsFor(Outer)
 		end
 
-		TweenService:Create(
+		local TweenInfoValue = TweenInfo.new(FadeTime, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+		FadeTween = TweenService:Create(
 			Outer,
-			TweenInfo.new(FadeTime, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+			TweenInfoValue,
 			{ GroupTransparency = Toggled and 0 or 1 }
-		):Play()
+		)
+		MoveTween = TweenService:Create(
+			Outer,
+			TweenInfoValue,
+			{ Position = Toggled and RestingPosition or OffsetPosition(RestingPosition, 0, -7) }
+		)
+		FadeTween:Play()
+		MoveTween:Play()
 
 		local ExpectedVisibility = Toggled
-		Library:DelayUi(FadeTime, function()
-			if Outer.Parent then Outer.Visible = ExpectedVisibility end
+		CancelFadeCleanup = Library:DelayUi(FadeTime, function()
+			if Generation ~= FadeGeneration then return end
+			if Outer.Parent then
+				Outer.Visible = ExpectedVisibility
+				Outer.Position = RestingPosition
+				Outer.GroupTransparency = ExpectedVisibility and 0 or 1
+			end
+			FadeTween = nil
+			MoveTween = nil
+			CancelFadeCleanup = nil
 			Fading = false
 		end)
 		return true
