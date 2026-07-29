@@ -4,6 +4,7 @@
 
 local InputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
+local GuiService = game:GetService("GuiService")
 local Teams = game:GetService("Teams")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -17,20 +18,70 @@ local SetHiddenProperty = sethiddenproperty or sethiddenprop
 local SetScriptable = setscriptable
 local ProtectGui = protectgui or (syn and syn.protect_gui)
 
-local IsMobile = InputService.TouchEnabled and not InputService.MouseEnabled
+local InitialViewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.zero
+local IsLargeTouchDesktop = InputService.MouseEnabled
+	and InputService.KeyboardEnabled
+	and InitialViewport.X >= 1600
+	and InitialViewport.Y >= 900
+local IsMobile = InputService.TouchEnabled and not IsLargeTouchDesktop
+local TouchButtonHeight = IsMobile and 42 or 22
+local TouchToggleHeight = IsMobile and 40 or 17
+local TouchSliderHeight = IsMobile and 40 or 14
+local TouchKeyHeight = IsMobile and 40 or 17
+local TouchDropdownRowHeight = IsMobile and 42 or 20
 
 local _clickHeld = false
+local ActiveTouchInputs = {}
+local ActivePointerInput = nil
 local function IsClickInput(Input)
 	local isClick = Input.UserInputType == Enum.UserInputType.MouseButton1
 		or Input.UserInputType == Enum.UserInputType.Touch
-	if isClick then
+	if isClick and Input.UserInputState ~= Enum.UserInputState.End then
 		_clickHeld = true
+		if Input.UserInputType == Enum.UserInputType.Touch then
+			ActiveTouchInputs[Input] = true
+			ActivePointerInput = Input
+		end
 	end
 	return isClick
 end
 
 local function IsClickHeld()
-	return _clickHeld or InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+	if next(ActiveTouchInputs) ~= nil then return true end
+	local MouseDown = false
+	pcall(function() MouseDown = InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end)
+	return _clickHeld or MouseDown
+end
+
+local function GetPointerPosition(Input)
+	local Pointer = Input or ActivePointerInput
+	if Pointer and Pointer.UserInputType == Enum.UserInputType.Touch
+		and (Input ~= nil or Pointer.UserInputState ~= Enum.UserInputState.End)
+	then
+		return Pointer.Position
+	end
+	return Vector2.new(Mouse.X, Mouse.Y)
+end
+
+local function IsPointerHeld(Input)
+	if Input and Input.UserInputType == Enum.UserInputType.Touch then
+		return ActiveTouchInputs[Input] == true
+	end
+	return IsClickHeld()
+end
+
+local function ReleasePointer(Input)
+	if Input.UserInputType == Enum.UserInputType.Touch then
+		ActiveTouchInputs[Input] = nil
+		if ActivePointerInput == Input then
+			ActivePointerInput = next(ActiveTouchInputs)
+		end
+	end
+	if next(ActiveTouchInputs) == nil then
+		local MouseDown = false
+		pcall(function() MouseDown = InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end)
+		_clickHeld = MouseDown
+	end
 end
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -90,7 +141,10 @@ do
 		local ViewportSize = Camera.ViewportSize
 		local HeightScale = ViewportSize.Y / BaseHeight
 		local WidthScale = (ViewportSize.X - 24) / RequiredUiWidth
-		local NewScale = math.clamp(math.min(HeightScale, WidthScale), 0.45, 1)
+		-- Preserve readable mobile controls; the window is fitted to the viewport separately.
+		local NewScale = if IsMobile
+			then 1
+			else math.clamp(math.min(HeightScale, WidthScale), 0.45, 1)
 		if NewScale <= 0 then NewScale = 0.45 end
 		local PreviousIdentity = nil
 		if typeof(GetThreadIdentity) == "function" then
@@ -108,8 +162,11 @@ do
 		end
 		_uiScale = NewScale
 		_invScale = 1 / NewScale
-		if Library and not Library.Unloaded and typeof(Library.RepositionPopups) == "function" then
-			Library:DelayUi(0, function() Library:RepositionPopups() end)
+		if Library and not Library.Unloaded then
+			Library:DelayUi(0, function()
+				if typeof(Library.UpdateViewportLayout) == "function" then Library:UpdateViewportLayout() end
+				if typeof(Library.RepositionPopups) == "function" then Library:RepositionPopups() end
+			end)
 		end
 	end
 
@@ -142,6 +199,19 @@ end
 -- Convert screen-space coordinates to UI offset coordinates (compensate for UIScale)
 local function ScreenToOffset(x, y)
 	return x * _invScale, y * _invScale
+end
+
+local function GetViewportInsets()
+	if not IsMobile then return 0, 0, 0, 0 end
+	local LeftInset, TopInset, RightInset, BottomInset = 0, 0, 0, 0
+	pcall(function()
+		local TopLeft, BottomRight = GuiService:GetGuiInset()
+		LeftInset = TopLeft.X * _invScale
+		TopInset = TopLeft.Y * _invScale
+		RightInset = BottomRight.X * _invScale
+		BottomInset = BottomRight.Y * _invScale
+	end)
+	return LeftInset, TopInset, RightInset, BottomInset
 end
 
 local Toggles = {}
@@ -186,7 +256,81 @@ Library = {
 
 	-- Mobile UI lock state
 	CantDragForced = false,
+	IsMobile = IsMobile,
+	MobileMargin = 8,
+	MobileController = nil,
+	MobileControllerPlaced = false,
+	ViewportLayoutScheduled = false,
+	LastViewportSize = nil,
 }
+
+function Library:RequestViewportLayout()
+	if Library.Unloaded or Library.ViewportLayoutScheduled then return end
+	Library.ViewportLayoutScheduled = true
+	Library:DelayUi(0, function()
+		Library.ViewportLayoutScheduled = false
+		Library:UpdateViewportLayout()
+	end)
+end
+
+function Library:UpdateViewportLayout()
+	if Library.Unloaded then return end
+	local Camera = workspace.CurrentCamera
+	local Viewport = Camera and Camera.ViewportSize * _invScale or nil
+	local Margin = (Library.MobileMargin or 8) * _invScale
+	local LeftInset, TopInset, RightInset, BottomInset = GetViewportInsets()
+	local ViewportChanged = Viewport and (not Library.LastViewportSize or Library.LastViewportSize ~= Viewport)
+	for _, Window in ipairs(Library.Windows) do
+		if Window and type(Window.FitToViewport) == "function" then
+			Window:FitToViewport()
+		end
+		if Window and type(Window.ResizeTabs) == "function" then
+			Window:ResizeTabs()
+		end
+	end
+	if IsMobile and Library.NotificationArea and Viewport then
+		local NotificationTop = math.max(TopInset + Margin, 48 * _invScale)
+		Library.NotificationArea.Position = UDim2.fromOffset(LeftInset + Margin, NotificationTop)
+		Library.NotificationArea.Size = UDim2.new(0, math.min(380, math.max(120, Viewport.X - LeftInset - RightInset - Margin * 2)), 1, -(NotificationTop + BottomInset + Margin))
+	end
+	if IsMobile and Library.MobileController and Library.MobileController.Parent and Viewport then
+		local Controller = Library.MobileController
+		local Width = Controller.AbsoluteSize.X * _invScale
+		local Height = Controller.AbsoluteSize.Y * _invScale
+		local X = Controller.Position.X.Scale * Viewport.X + Controller.Position.X.Offset
+		local Y = Controller.Position.Y.Scale * Viewport.Y + Controller.Position.Y.Offset
+		if not Library.MobileControllerPlaced or ViewportChanged then
+			X = LeftInset + (Viewport.X - LeftInset - RightInset) * 0.5
+			Y = Viewport.Y - BottomInset - Margin
+			Library.MobileControllerPlaced = true
+		else
+			X = math.clamp(X, LeftInset + Margin + Width * 0.5, math.max(LeftInset + Margin + Width * 0.5, Viewport.X - RightInset - Margin - Width * 0.5))
+			Y = math.clamp(Y, TopInset + Margin + Height, math.max(TopInset + Margin + Height, Viewport.Y - BottomInset - Margin))
+		end
+		Controller.AnchorPoint = Vector2.new(0.5, 1)
+		Controller.Position = UDim2.fromOffset(X, Y)
+	end
+	if Library.Watermark and Library.Watermark.Visible then
+		if Viewport then
+			local Width = Library.Watermark.AbsoluteSize.X * _invScale
+			local Height = Library.Watermark.AbsoluteSize.Y * _invScale
+			local X = math.clamp(Library.Watermark.Position.X.Offset, LeftInset + Margin, math.max(LeftInset + Margin, Viewport.X - RightInset - Width - Margin))
+			local Y = math.clamp(Library.Watermark.Position.Y.Offset, TopInset + Margin, math.max(TopInset + Margin, Viewport.Y - BottomInset - Height - Margin))
+			Library.Watermark.Position = UDim2.fromOffset(X, Y)
+		end
+	end
+	if Library.KeybindFrame and Library.KeybindFrame.Visible then
+		if Viewport then
+			local Width = Library.KeybindFrame.AbsoluteSize.X * _invScale
+			local Height = Library.KeybindFrame.AbsoluteSize.Y * _invScale
+			local X = math.clamp(Library.KeybindFrame.AbsolutePosition.X * _invScale, LeftInset + Margin, math.max(LeftInset + Margin, Viewport.X - RightInset - Width - Margin))
+			local Y = math.clamp(Library.KeybindFrame.AbsolutePosition.Y * _invScale, TopInset + Margin, math.max(TopInset + Margin, Viewport.Y - BottomInset - Height - Margin))
+			Library.KeybindFrame.Position = UDim2.fromOffset(X, Y)
+			Library.KeybindFrame.AnchorPoint = Vector2.zero
+		end
+	end
+	Library.LastViewportSize = Viewport
+end
 
 function Library:DelayUi(delaySeconds, callback)
 	if Library.Unloaded then return function() end end
@@ -508,16 +652,22 @@ function Library:MakeDraggable(Instance, Cutoff)
 	Instance.Active = true
 	local StopDragging = nil
 
-	Connect(Instance.InputBegan, function(Input)
-		if IsClickInput(Input) then
+	Instance.InputBegan:Connect(function(Input)
+		if Library.Unloaded then return end
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch
+		then
+			local StartPointer = Input.Position
+			IsClickInput(Input)
+			Library:DelayUi(0, function()
 			-- Prevent dragging if UI is locked (mobile feature)
 			if Library.UILocked or Library.CantDragForced then
 				return
 			end
 
 			local ObjPos = Vector2.new(
-				(Mouse.X - Instance.AbsolutePosition.X) * _invScale,
-				(Mouse.Y - Instance.AbsolutePosition.Y) * _invScale
+				(StartPointer.X - Instance.AbsolutePosition.X) * _invScale,
+				(StartPointer.Y - Instance.AbsolutePosition.Y) * _invScale
 			)
 
 			if ObjPos.Y > (Cutoff or 40) then
@@ -526,29 +676,61 @@ function Library:MakeDraggable(Instance, Cutoff)
 
 			if StopDragging then StopDragging() end
 			StopDragging = Library:AddUiUpdater(function()
-				if not IsClickHeld() or Library.UILocked or Library.CantDragForced or not Instance.Parent then
+				if not IsPointerHeld(Input) or Library.UILocked or Library.CantDragForced or not Instance.Parent then
 					StopDragging = nil
 					return false
 				end
-				local X = Mouse.X * _invScale - ObjPos.X + (Instance.AbsoluteSize.X * _invScale * Instance.AnchorPoint.X)
-				local Y = Mouse.Y * _invScale - ObjPos.Y + (Instance.AbsoluteSize.Y * _invScale * Instance.AnchorPoint.Y)
+				local CurrentPointer = GetPointerPosition(Input)
+				local X = CurrentPointer.X * _invScale - ObjPos.X + (Instance.AbsoluteSize.X * _invScale * Instance.AnchorPoint.X)
+				local Y = CurrentPointer.Y * _invScale - ObjPos.Y + (Instance.AbsoluteSize.Y * _invScale * Instance.AnchorPoint.Y)
 				local Camera = workspace.CurrentCamera
 				if Camera then
 					local Viewport = Camera.ViewportSize * _invScale
+					local LeftInset, TopInset, RightInset, BottomInset = GetViewportInsets()
 					local Width = Instance.AbsoluteSize.X * _invScale
 					local Height = Instance.AbsoluteSize.Y * _invScale
 					local Padding = 6
-					local MinX = Padding + Width * Instance.AnchorPoint.X
-					local MaxX = Viewport.X - Padding - Width * (1 - Instance.AnchorPoint.X)
-					local MinY = Padding + Height * Instance.AnchorPoint.Y
-					local MaxY = Viewport.Y - Padding - Height * (1 - Instance.AnchorPoint.Y)
+					local MinX = LeftInset + Padding + Width * Instance.AnchorPoint.X
+					local MaxX = Viewport.X - RightInset - Padding - Width * (1 - Instance.AnchorPoint.X)
+					local MinY = TopInset + Padding + Height * Instance.AnchorPoint.Y
+					local MaxY = Viewport.Y - BottomInset - Padding - Height * (1 - Instance.AnchorPoint.Y)
 					X = math.clamp(X, math.min(MinX, MaxX), math.max(MinX, MaxX))
 					Y = math.clamp(Y, math.min(MinY, MaxY), math.max(MinY, MaxY))
 				end
 				Instance.Position = UDim2.fromOffset(X, Y)
 				return true
 			end)
+			end)
 		end
+	end)
+end
+
+function Library:ConnectClick(Instance, Callback)
+	return Instance.InputBegan:Connect(function(Input)
+		if Library.Unloaded then return end
+		if Input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and Input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		local StartPosition = Input.Position
+		IsClickInput(Input)
+		Library:DelayUi(0, function()
+			if not Instance.Parent then return end
+			if Input.UserInputType ~= Enum.UserInputType.Touch then
+				Callback(Input)
+				return
+			end
+
+			local Cancelled = false
+			Library:AddUiUpdater(function()
+				if not Instance.Parent then return false end
+				if (Input.Position - StartPosition).Magnitude > 12 then Cancelled = true end
+				if IsPointerHeld(Input) then return true end
+				if not Cancelled then Callback(Input) end
+				return false
+			end)
+		end)
 	end)
 end
 
@@ -596,9 +778,10 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
 		IsHovering = true
 
+		local Pointer = GetPointerPosition()
 		local XPos, YPos = Library:ClampPopupOffset(
-			(Mouse.X + 15) * _invScale,
-			(Mouse.Y + 12) * _invScale,
+			(Pointer.X + 15) * _invScale,
+			(Pointer.Y + 12) * _invScale,
 			Tooltip.Size.X.Offset,
 			Tooltip.Size.Y.Offset
 		)
@@ -612,9 +795,10 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 				StopFollowing = nil
 				return false
 			end
+			local Pointer = GetPointerPosition()
 			local FollowX, FollowY = Library:ClampPopupOffset(
-				(Mouse.X + 15) * _invScale,
-				(Mouse.Y + 12) * _invScale,
+				(Pointer.X + 15) * _invScale,
+				(Pointer.Y + 12) * _invScale,
 				Tooltip.Size.X.Offset,
 				Tooltip.Size.Y.Offset
 			)
@@ -658,29 +842,31 @@ function Library:OnHighlight(HighlightInstance, Instance, Properties, Properties
 	Connect(HighlightInstance.MouseLeave, function() Apply(PropertiesDefault) end)
 end
 
-function Library:MouseIsOverOpenedFrame()
+function Library:MouseIsOverOpenedFrame(Input)
+	local Pointer = GetPointerPosition(Input)
 	for Frame, _ in next, Library.OpenedFrames do
 		local AbsPos, AbsSize = Frame.AbsolutePosition, Frame.AbsoluteSize
 
 		if
-			Mouse.X >= AbsPos.X
-			and Mouse.X <= AbsPos.X + AbsSize.X
-			and Mouse.Y >= AbsPos.Y
-			and Mouse.Y <= AbsPos.Y + AbsSize.Y
+			Pointer.X >= AbsPos.X
+			and Pointer.X <= AbsPos.X + AbsSize.X
+			and Pointer.Y >= AbsPos.Y
+			and Pointer.Y <= AbsPos.Y + AbsSize.Y
 		then
 			return true
 		end
 	end
 end
 
-function Library:IsMouseOverFrame(Frame)
+function Library:IsMouseOverFrame(Frame, Input)
 	local AbsPos, AbsSize = Frame.AbsolutePosition, Frame.AbsoluteSize
+	local Pointer = GetPointerPosition(Input)
 
 	if
-		Mouse.X >= AbsPos.X
-		and Mouse.X <= AbsPos.X + AbsSize.X
-		and Mouse.Y >= AbsPos.Y
-		and Mouse.Y <= AbsPos.Y + AbsSize.Y
+		Pointer.X >= AbsPos.X
+		and Pointer.X <= AbsPos.X + AbsSize.X
+		and Pointer.Y >= AbsPos.Y
+		and Pointer.Y <= AbsPos.Y + AbsSize.Y
 	then
 		return true
 	end
@@ -711,10 +897,13 @@ function Library:ClampPopupOffset(X, Y, Width, Height, Padding)
 	local Camera = workspace.CurrentCamera
 	if not Camera then return X, Y end
 	local Viewport = Camera.ViewportSize * _invScale
+	local LeftInset, TopInset, RightInset, BottomInset = GetViewportInsets()
 	Padding = Padding or 6
-	local MaxX = math.max(Padding, Viewport.X - Width - Padding)
-	local MaxY = math.max(Padding, Viewport.Y - Height - Padding)
-	return math.clamp(X, Padding, MaxX), math.clamp(Y, Padding, MaxY)
+	local MinX = LeftInset + Padding
+	local MinY = TopInset + Padding
+	local MaxX = math.max(MinX, Viewport.X - RightInset - Width - Padding)
+	local MaxY = math.max(MinY, Viewport.Y - BottomInset - Height - Padding)
+	return math.clamp(X, MinX, MaxX), math.clamp(Y, MinY, MaxY)
 end
 
 function Library:PositionPopup(Popup, Anchor, Placement, Gap)
@@ -737,8 +926,9 @@ function Library:PositionPopup(Popup, Anchor, Placement, Gap)
 	local Camera = workspace.CurrentCamera
 	if Camera then
 		local Viewport = Camera.ViewportSize * _invScale
-		if Placement == "Right" and X + PopupWidth > Viewport.X - 6 then X = AnchorX - PopupWidth - Gap end
-		if Placement ~= "Right" and Y + PopupHeight > Viewport.Y - 6 then Y = AnchorY - PopupHeight - Gap end
+		local _, TopInset, RightInset, BottomInset = GetViewportInsets()
+		if Placement == "Right" and X + PopupWidth > Viewport.X - RightInset - 6 then X = AnchorX - PopupWidth - Gap end
+		if Placement ~= "Right" and Y + PopupHeight > Viewport.Y - BottomInset - 6 then Y = math.max(TopInset + 6, AnchorY - PopupHeight - Gap) end
 	end
 	X, Y = Library:ClampPopupOffset(X, Y, PopupWidth, PopupHeight)
 	Popup.Position = UDim2.fromOffset(X, Y)
@@ -929,6 +1119,9 @@ function Library:Unload()
 	table.clear(Library.PopupAnchors)
 	table.clear(Library.DependencyBoxes)
 	table.clear(Library.Windows)
+	table.clear(ActiveTouchInputs)
+	ActivePointerInput = nil
+	_clickHeld = false
 	table.clear(Toggles)
 	table.clear(Options)
 	local Environment = getgenv()
@@ -941,6 +1134,10 @@ function Library:Unload()
 	Library.KeybindFrame = nil
 	Library.KeybindContainer = nil
 	Library.ToggleKeybind = nil
+	Library.MobileController = nil
+	Library.MobileControllerPlaced = false
+	Library.ViewportLayoutScheduled = false
+	Library.LastViewportSize = nil
 	Library.ScreenGui = nil
 	if Environment.Library == Library then Environment.Library = nil end
 	ScreenGui = nil
@@ -963,15 +1160,21 @@ Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
 	end
 end))
 
-Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
-	if IsClickInput(Input) then
-		_clickHeld = true
+Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
+	if Library.Unloaded then return end
+	if Input.UserInputType == Enum.UserInputType.MouseButton1
+		or Input.UserInputType == Enum.UserInputType.Touch
+	then
+		IsClickInput(Input)
 	end
 end))
 
-Library:GiveSignal(Connect(InputService.InputEnded, function(Input)
-	if IsClickInput(Input) then
-		_clickHeld = false
+Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
+	if Library.Unloaded then return end
+	if Input.UserInputType == Enum.UserInputType.MouseButton1
+		or Input.UserInputType == Enum.UserInputType.Touch
+	then
+		ReleasePointer(Input)
 	end
 end))
 
@@ -1334,11 +1537,7 @@ do
 
 				Library:OnHighlight(Button, Button, { TextColor3 = "AccentColor" }, { TextColor3 = "FontColor" })
 
-				Connect(Button.InputBegan, function(Input)
-					if not IsClickInput(Input) then
-						return
-					end
-
+				Library:ConnectClick(Button, function()
 					Callback()
 				end)
 			end
@@ -1496,20 +1695,22 @@ do
 		local StopSatVibUpdate = nil
 		Connect(SatVibMap.InputBegan, function(Input)
 			if IsClickInput(Input) then
+				local PointerInput = Input
 				if StopSatVibUpdate then StopSatVibUpdate() end
 				StopSatVibUpdate = Library:AddUiUpdater(function()
-					if not IsClickHeld() or not SatVibMap.Parent then
+					if not IsPointerHeld(PointerInput) or not SatVibMap.Parent then
 						StopSatVibUpdate = nil
 						Library:AttemptSave()
 						return false
 					end
 					local MinX = SatVibMap.AbsolutePosition.X
 					local MaxX = MinX + SatVibMap.AbsoluteSize.X
-					local MouseX = math.clamp(Mouse.X, MinX, MaxX)
+					local Pointer = GetPointerPosition(PointerInput)
+					local MouseX = math.clamp(Pointer.X, MinX, MaxX)
 
 					local MinY = SatVibMap.AbsolutePosition.Y
 					local MaxY = MinY + SatVibMap.AbsoluteSize.Y
-					local MouseY = math.clamp(Mouse.Y, MinY, MaxY)
+					local MouseY = math.clamp(Pointer.Y, MinY, MaxY)
 
 					ColorPicker.Sat = (MouseX - MinX) / (MaxX - MinX)
 					ColorPicker.Vib = 1 - ((MouseY - MinY) / (MaxY - MinY))
@@ -1522,16 +1723,18 @@ do
 		local StopHueUpdate = nil
 		Connect(HueSelectorInner.InputBegan, function(Input)
 			if IsClickInput(Input) then
+				local PointerInput = Input
 				if StopHueUpdate then StopHueUpdate() end
 				StopHueUpdate = Library:AddUiUpdater(function()
-					if not IsClickHeld() or not HueSelectorInner.Parent then
+					if not IsPointerHeld(PointerInput) or not HueSelectorInner.Parent then
 						StopHueUpdate = nil
 						Library:AttemptSave()
 						return false
 					end
 					local MinY = HueSelectorInner.AbsolutePosition.Y
 					local MaxY = MinY + HueSelectorInner.AbsoluteSize.Y
-					local MouseY = math.clamp(Mouse.Y, MinY, MaxY)
+					local Pointer = GetPointerPosition(PointerInput)
+					local MouseY = math.clamp(Pointer.Y, MinY, MaxY)
 
 					ColorPicker.Hue = ((MouseY - MinY) / (MaxY - MinY))
 					ColorPicker:Display()
@@ -1540,15 +1743,18 @@ do
 			end
 		end)
 
-		Connect(DisplayFrame.InputBegan, function(Input)
-			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+		Library:ConnectClick(DisplayFrame, function(Input)
+			if not Library:MouseIsOverOpenedFrame(Input) then
 				if PickerFrameOuter.Visible then
 					ColorPicker:Hide()
 				else
 					ContextMenu:Hide()
 					ColorPicker:Show()
 				end
-			elseif Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame() then
+			end
+		end)
+		Connect(DisplayFrame.InputBegan, function(Input)
+			if Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame(Input) then
 				ContextMenu:Show()
 				ColorPicker:Hide()
 			end
@@ -1558,16 +1764,18 @@ do
 			local StopTransparencyUpdate = nil
 			Connect(TransparencyBoxInner.InputBegan, function(Input)
 				if IsClickInput(Input) then
+					local PointerInput = Input
 					if StopTransparencyUpdate then StopTransparencyUpdate() end
 					StopTransparencyUpdate = Library:AddUiUpdater(function()
-						if not IsClickHeld() or not TransparencyBoxInner.Parent then
+						if not IsPointerHeld(PointerInput) or not TransparencyBoxInner.Parent then
 							StopTransparencyUpdate = nil
 							Library:AttemptSave()
 							return false
 						end
 						local MinX = TransparencyBoxInner.AbsolutePosition.X
 						local MaxX = MinX + TransparencyBoxInner.AbsoluteSize.X
-						local MouseX = math.clamp(Mouse.X, MinX, MaxX)
+						local Pointer = GetPointerPosition(PointerInput)
+						local MouseX = math.clamp(Pointer.X, MinX, MaxX)
 
 						ColorPicker.Transparency = 1 - ((MouseX - MinX) / (MaxX - MinX))
 
@@ -1580,13 +1788,14 @@ do
 
 		Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 			if IsClickInput(Input) then
+				local Pointer = GetPointerPosition(Input)
 				local AbsPos, AbsSize = PickerFrameOuter.AbsolutePosition, PickerFrameOuter.AbsoluteSize
 
 				if
-					Mouse.X < AbsPos.X
-					or Mouse.X > AbsPos.X + AbsSize.X
-					or Mouse.Y < (AbsPos.Y - 20 - 1)
-					or Mouse.Y > AbsPos.Y + AbsSize.Y
+					Pointer.X < AbsPos.X
+					or Pointer.X > AbsPos.X + AbsSize.X
+					or Pointer.Y < (AbsPos.Y - 20 - 1)
+					or Pointer.Y > AbsPos.Y + AbsSize.Y
 				then
 					ColorPicker:Hide()
 				end
@@ -1642,7 +1851,7 @@ do
 		local PickOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Size = UDim2.new(0, 34, 0, 17),
+			Size = UDim2.new(0, 34, 0, TouchKeyHeight),
 			ZIndex = 6,
 			Parent = ToggleLabel,
 		})
@@ -1674,7 +1883,7 @@ do
 		local ModeSelectOuter = Library:Create("Frame", {
 			BorderColor3 = Color3.new(0, 0, 0),
 			Position = UDim2.fromOffset(0, 0),
-			Size = UDim2.new(0, 76, 0, (#Modes * 18) + 2),
+			Size = UDim2.new(0, IsMobile and 104 or 76, 0, (#Modes * (IsMobile and 42 or 18)) + 2),
 			Visible = false,
 			ZIndex = 14,
 			Parent = ScreenGui,
@@ -1708,7 +1917,7 @@ do
 
 		local ContainerLabel = Library:CreateLabel({
 			TextXAlignment = Enum.TextXAlignment.Left,
-			Size = UDim2.new(1, 0, 0, 18),
+			Size = UDim2.new(1, 0, 0, IsMobile and 42 or 18),
 			TextSize = 13,
 			Visible = false,
 			ZIndex = 224,
@@ -1723,7 +1932,7 @@ do
 			local Label = Library:CreateLabel({
 				Active = false,
 				Position = UDim2.fromOffset(6, 0),
-				Size = UDim2.new(1, -12, 0, 18),
+				Size = UDim2.new(1, -12, 0, IsMobile and 42 or 18),
 				TextSize = 13,
 				Text = Mode,
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -1752,11 +1961,9 @@ do
 				Library.RegistryMap[Label].Properties.TextColor3 = "FontColor"
 			end
 
-			Connect(Label.InputBegan, function(Input)
-				if IsClickInput(Input) then
-					ModeButton:Select()
-					Library:AttemptSave()
-				end
+			Library:ConnectClick(Label, function()
+				ModeButton:Select()
+				Library:AttemptSave()
 			end)
 
 			if Mode == KeyPicker.Mode then
@@ -1773,7 +1980,7 @@ do
 
 			local State = KeyPicker:GetState()
 			local KeyWidth = select(1, Library:GetTextBounds(tostring(KeyPicker.Value), Library.Font, 13))
-			PickOuter.Size = UDim2.fromOffset(math.clamp(KeyWidth + 12, 34, 92), 17)
+			PickOuter.Size = UDim2.fromOffset(math.clamp(KeyWidth + 12, 34, 92), TouchKeyHeight)
 			UpdateModePosition()
 
 			-- Only show in keybind list if the associated toggle/feature is active
@@ -1794,14 +2001,23 @@ do
 
 			for _, Label in next, Library.KeybindContainer:GetChildren() do
 				if Label:IsA("TextLabel") and Label.Visible then
-					YSize = YSize + 18
+					YSize = YSize + (IsMobile and 42 or 18)
 					if Label.TextBounds.X > XSize then
 						XSize = Label.TextBounds.X
 					end
 				end
 			end
 
-			Library.KeybindFrame.Size = UDim2.new(0, math.max(XSize + 18, 160), 0, YSize + 27)
+			local MaxWidth = math.huge
+			if IsMobile and workspace.CurrentCamera then
+				local LeftInset, _, RightInset = GetViewportInsets()
+				MaxWidth = math.max(120, workspace.CurrentCamera.ViewportSize.X * _invScale - LeftInset - RightInset - (Library.MobileMargin * 2))
+			end
+			local NewSize = UDim2.new(0, math.min(math.max(XSize + 18, 160), MaxWidth), 0, YSize + 27)
+			if Library.KeybindFrame.Size ~= NewSize then
+				Library.KeybindFrame.Size = NewSize
+				if Library.KeybindFrame.Visible then Library:RequestViewportLayout() end
+			end
 		end
 
 		function KeyPicker:GetState()
@@ -1881,8 +2097,26 @@ do
 			if DisplayLabel.Parent then DisplayLabel.Text = tostring(KeyPicker.Value) end
 		end
 
-		Connect(PickOuter.InputBegan, function(Input)
-			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+		Library:ConnectClick(PickOuter, function(Input)
+			if not Library:MouseIsOverOpenedFrame(Input) then
+				if IsMobile and Input.UserInputType == Enum.UserInputType.Touch then
+					if KeyPicker.Mode == "Hold" then
+						KeyPicker.Toggled = true
+						KeyPicker:DoClick()
+						Library:DelayUi(0.12, function()
+							KeyPicker.Toggled = false
+							KeyPicker:DoClick()
+							KeyPicker:Update()
+						end)
+					elseif KeyPicker.Mode == "Toggle" then
+						KeyPicker.Toggled = not KeyPicker.Toggled
+						KeyPicker:DoClick()
+					else
+						KeyPicker:DoClick()
+					end
+					KeyPicker:Update()
+					return
+				end
 				if Picking then return end
 				Picking = true
 				DisplayLabel.Text = "."
@@ -1924,7 +2158,10 @@ do
 					Library:AttemptSave()
 				end)
 				Library:GiveSignal(CaptureEvent)
-			elseif Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame() then
+			end
+		end)
+		Connect(PickOuter.InputBegan, function(Input)
+			if Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame(Input) then
 				ModeSelectOuter.Visible = true
 				Library.OpenedFrames[ModeSelectOuter] = true
 				UpdateModePosition()
@@ -1958,13 +2195,14 @@ do
 			end
 
 			if IsClickInput(Input) then
+				local Pointer = GetPointerPosition(Input)
 				local AbsPos, AbsSize = ModeSelectOuter.AbsolutePosition, ModeSelectOuter.AbsoluteSize
 
 				if
-					Mouse.X < AbsPos.X
-					or Mouse.X > AbsPos.X + AbsSize.X
-					or Mouse.Y < (AbsPos.Y - 20 - 1)
-					or Mouse.Y > AbsPos.Y + AbsSize.Y
+					Pointer.X < AbsPos.X
+					or Pointer.X > AbsPos.X + AbsSize.X
+					or Pointer.Y < (AbsPos.Y - 20 - 1)
+					or Pointer.Y > AbsPos.Y + AbsSize.Y
 				then
 					ModeSelectOuter.Visible = false
 					Library.OpenedFrames[ModeSelectOuter] = nil
@@ -1973,9 +2211,12 @@ do
 		end))
 
 		Library:GiveSignal(Connect(InputService.InputEnded, function(Input)
-			if not Picking then
-				KeyPicker:Update()
-			end
+			if Picking or KeyPicker.Mode ~= "Hold" then return end
+			local Key = KeyPicker.Value
+			local MatchesMouse = Key == "MB1" and Input.UserInputType == Enum.UserInputType.MouseButton1
+				or Key == "MB2" and Input.UserInputType == Enum.UserInputType.MouseButton2
+			local MatchesKeyboard = Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode.Name == Key
+			if MatchesMouse or MatchesKeyboard then KeyPicker:Update() end
 		end))
 
 		KeyPicker:Update()
@@ -2094,7 +2335,7 @@ do
 			local Outer = Library:Create("Frame", {
 				BackgroundColor3 = Color3.new(0, 0, 0),
 				BorderColor3 = Color3.new(0, 0, 0),
-				Size = UDim2.new(1, -4, 0, 22),
+				Size = UDim2.new(1, -4, 0, TouchButtonHeight),
 				ZIndex = 5,
 			})
 
@@ -2140,14 +2381,9 @@ do
 
 		local function InitEvents(Button)
 			local function ValidateClick(Input)
-				if Library:MouseIsOverOpenedFrame() then
+				if Library:MouseIsOverOpenedFrame(Input) then
 					return false
 				end
-
-				if not IsClickInput(Input) then
-					return false
-				end
-
 				return true
 			end
 
@@ -2162,7 +2398,7 @@ do
 				Button.Label.Text = Button.Text
 			end
 
-			Connect(Button.Outer.InputBegan, function(Input)
+			Library:ConnectClick(Button.Outer, function(Input)
 				if not ValidateClick(Input) then
 					return
 				end
@@ -2215,7 +2451,7 @@ do
 
 			ProcessButtonParams("SubButton", SubButton, ...)
 
-			self.Outer.Size = UDim2.new(0.5, -2, 0, 22)
+			self.Outer.Size = UDim2.new(0.5, -2, 0, TouchButtonHeight)
 
 			SubButton.Outer, SubButton.Inner, SubButton.Label = CreateBaseButton(SubButton)
 
@@ -2315,7 +2551,7 @@ do
 		local TextBoxOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Size = UDim2.new(1, -4, 0, 22),
+			Size = UDim2.new(1, -4, 0, TouchButtonHeight),
 			ZIndex = 5,
 			Parent = Container,
 		})
@@ -2496,7 +2732,7 @@ do
 		local ToggleOuter = Library:Create("Frame", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Size = UDim2.new(1, -4, 0, 17),
+			Size = UDim2.new(1, -4, 0, TouchToggleHeight),
 			ZIndex = 5,
 			Parent = Container,
 		})
@@ -2504,8 +2740,8 @@ do
 		local ToggleBoxOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Position = UDim2.fromOffset(0, 1),
-			Size = UDim2.fromOffset(15, 15),
+			Position = UDim2.fromOffset(0, IsMobile and 4 or 1),
+			Size = UDim2.fromOffset(IsMobile and 32 or 15, IsMobile and 32 or 15),
 			ZIndex = 5,
 			Parent = ToggleOuter,
 		})
@@ -2528,8 +2764,8 @@ do
 			BorderColor3 = "OutlineColor",
 		})
 		local ToggleLabel = Library:CreateLabel({
-			Size = UDim2.new(1, -21, 1, 0),
-			Position = UDim2.fromOffset(21, 0),
+			Size = UDim2.new(1, -(IsMobile and 40 or 21), 1, 0),
+			Position = UDim2.fromOffset(IsMobile and 40 or 21, 0),
 			TextSize = 14,
 			Text = Info.Text,
 			TextXAlignment = Enum.TextXAlignment.Left,
@@ -2542,7 +2778,7 @@ do
 			AnchorPoint = Vector2.new(1, 0),
 			BackgroundTransparency = 1,
 			Position = UDim2.fromScale(1, 0),
-			Size = UDim2.fromOffset(0, 17),
+			Size = UDim2.fromOffset(0, TouchToggleHeight),
 			ZIndex = 7,
 			Parent = ToggleOuter,
 		})
@@ -2556,8 +2792,9 @@ do
 		local ToggleRegion
 		local function ResizeToggleText()
 			local AddonWidth = AddonLayout.AbsoluteContentSize.X
-			AddonContainer.Size = UDim2.fromOffset(AddonWidth, 17)
-			ToggleLabel.Size = UDim2.new(1, -(21 + (AddonWidth > 0 and AddonWidth + 5 or 0)), 1, 0)
+			local LabelOffset = IsMobile and 40 or 21
+			AddonContainer.Size = UDim2.fromOffset(AddonWidth, TouchToggleHeight)
+			ToggleLabel.Size = UDim2.new(1, -(LabelOffset + (AddonWidth > 0 and AddonWidth + 5 or 0)), 1, 0)
 			if ToggleRegion then
 				ToggleRegion.Size = UDim2.new(1, -(AddonWidth > 0 and AddonWidth + 4 or 0), 1, 0)
 			end
@@ -2633,8 +2870,8 @@ do
 			Library:UpdateDependencyBoxes()
 		end
 
-		Connect(ToggleRegion.InputBegan, function(Input)
-			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+		Library:ConnectClick(ToggleRegion, function(Input)
+			if not Library:MouseIsOverOpenedFrame(Input) then
 				Toggle:SetValue(not Toggle.Value) -- Why was it not like this from the start?
 				Library:AttemptSave()
 			end
@@ -2699,7 +2936,7 @@ do
 		local SliderOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Size = UDim2.new(1, -4, 0, 14),
+			Size = UDim2.new(1, -4, 0, TouchSliderHeight),
 			ZIndex = 5,
 			Parent = Container,
 		})
@@ -2758,7 +2995,7 @@ do
 		})
 		local FillDisplayLabel = Library:CreateLabel({
 			Position = UDim2.fromOffset(0, 0),
-			Size = UDim2.fromOffset(0, 14),
+			Size = UDim2.fromOffset(0, TouchSliderHeight),
 			TextColor3 = Library.Black,
 			TextSize = 14,
 			Text = "Infinite",
@@ -2767,7 +3004,7 @@ do
 		})
 		Library.RegistryMap[FillDisplayLabel].Properties.TextColor3 = "Black"
 		local function ResizeFillLabel()
-			FillDisplayLabel.Size = UDim2.fromOffset(math.max(SliderInner.AbsoluteSize.X * _invScale, 1), 14)
+			FillDisplayLabel.Size = UDim2.fromOffset(math.max(SliderInner.AbsoluteSize.X * _invScale, 1), TouchSliderHeight)
 		end
 		Connect(SliderInner:GetPropertyChangedSignal("AbsoluteSize"), ResizeFillLabel)
 		ResizeFillLabel()
@@ -2849,15 +3086,17 @@ do
 		local StopSliderUpdate = nil
 		Connect(SliderInner.InputBegan, function(Input)
 			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+				local PointerInput = Input
 				if StopSliderUpdate then StopSliderUpdate() end
 				StopSliderUpdate = Library:AddUiUpdater(function()
-					if not IsClickHeld() or not SliderInner.Parent then
+					if not IsPointerHeld(PointerInput) or not SliderInner.Parent then
 						StopSliderUpdate = nil
 						Library:AttemptSave()
 						return false
 					end
 					local MaxSize = math.max(SliderInner.AbsoluteSize.X * _invScale, 1)
-					local nX = math.clamp((Mouse.X - SliderInner.AbsolutePosition.X) * _invScale, 0, MaxSize)
+					local Pointer = GetPointerPosition(PointerInput)
+					local nX = math.clamp((Pointer.X - SliderInner.AbsolutePosition.X) * _invScale, 0, MaxSize)
 
 					local nValue = Slider:GetValueFromXOffset(nX)
 					local OldValue = Slider.Value
@@ -2940,7 +3179,7 @@ do
 		local DropdownOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
-			Size = UDim2.new(1, -4, 0, 22),
+			Size = UDim2.new(1, -4, 0, TouchButtonHeight),
 			ZIndex = 5,
 			Parent = Container,
 		})
@@ -3017,7 +3256,7 @@ do
 
 		local function RecalculateListSize(YSize)
 			ListOuter.Size =
-				UDim2.fromOffset(DropdownOuter.AbsoluteSize.X * _invScale, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
+				UDim2.fromOffset(DropdownOuter.AbsoluteSize.X * _invScale, YSize or (MAX_DROPDOWN_ITEMS * TouchDropdownRowHeight + 2))
 		end
 
 		RecalculateListPosition()
@@ -3124,7 +3363,7 @@ do
 					BackgroundColor3 = Library.MainColor,
 					BorderColor3 = Library.OutlineColor,
 					BorderMode = Enum.BorderMode.Middle,
-					Size = UDim2.new(1, -1, 0, 20),
+					Size = UDim2.new(1, -1, 0, TouchDropdownRowHeight),
 					ZIndex = 23,
 					Active = true,
 					Parent = Scrolling,
@@ -3172,43 +3411,41 @@ do
 					Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Selected and "AccentColor" or "FontColor"
 				end
 
-				Connect(ButtonLabel.InputBegan, function(Input)
-					if IsClickInput(Input) then
-						local Try = not Selected
+				Library:ConnectClick(ButtonLabel, function()
+					local Try = not Selected
 
-						local ActiveCount = Info.Multi and #Dropdown:GetActiveValues() or Dropdown:GetActiveValues()
-						if ActiveCount == 1 and not Try and not Info.AllowNull then
-						else
-							if Info.Multi then
-								Selected = Try
+					local ActiveCount = Info.Multi and #Dropdown:GetActiveValues() or Dropdown:GetActiveValues()
+					if ActiveCount == 1 and not Try and not Info.AllowNull then
+					else
+						if Info.Multi then
+							Selected = Try
 
-								if Selected then
-									Dropdown.Value[Value] = true
-								else
-									Dropdown.Value[Value] = nil
-								end
+							if Selected then
+								Dropdown.Value[Value] = true
 							else
-								Selected = Try
+								Dropdown.Value[Value] = nil
+							end
+						else
+							Selected = Try
 
-								if Selected then
-									Dropdown.Value = Value
-								else
-									Dropdown.Value = nil
-								end
-
-								for _, OtherButton in next, Buttons do
-									OtherButton:UpdateButton()
-								end
+							if Selected then
+								Dropdown.Value = Value
+							else
+								Dropdown.Value = nil
 							end
 
-							Table:UpdateButton()
-							Dropdown:Display()
-
-							Library:SafeCallback(Dropdown.Callback, Dropdown.Value)
-							Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
-
-							Library:AttemptSave()
+							for _, OtherButton in next, Buttons do
+								OtherButton:UpdateButton()
+							end
 						end
+
+						Table:UpdateButton()
+						Dropdown:Display()
+
+						Library:SafeCallback(Dropdown.Callback, Dropdown.Value)
+						Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
+
+						Library:AttemptSave()
 					end
 				end)
 
@@ -3218,9 +3455,9 @@ do
 				Buttons[Button] = Table
 			end
 
-			Scrolling.CanvasSize = UDim2.fromOffset(0, (Count * 20) + 1)
+			Scrolling.CanvasSize = UDim2.fromOffset(0, (Count * TouchDropdownRowHeight) + 1)
 
-			local Y = math.clamp(Count * 20, 0, MAX_DROPDOWN_ITEMS * 20) + 1
+			local Y = math.clamp(Count * TouchDropdownRowHeight, 0, MAX_DROPDOWN_ITEMS * TouchDropdownRowHeight) + 1
 			RecalculateListSize(Y)
 			RecalculateListPosition()
 		end
@@ -3328,8 +3565,8 @@ do
 			Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
 		end
 
-		Connect(DropdownOuter.InputBegan, function(Input)
-			if IsClickInput(Input) and not Library:MouseIsOverOpenedFrame() then
+		Library:ConnectClick(DropdownOuter, function(Input)
+			if not Library:MouseIsOverOpenedFrame(Input) then
 				if ListOuter.Visible then
 					Dropdown:CloseDropdown()
 				else
@@ -3340,13 +3577,14 @@ do
 
 		Library:GiveSignal(Connect(InputService.InputBegan, function(Input)
 			if IsClickInput(Input) then
+				local Pointer = GetPointerPosition(Input)
 				local AbsPos, AbsSize = ListOuter.AbsolutePosition, ListOuter.AbsoluteSize
 
 				if
-					Mouse.X < AbsPos.X
-					or Mouse.X > AbsPos.X + AbsSize.X
-					or Mouse.Y < (AbsPos.Y - 20 - 1)
-					or Mouse.Y > AbsPos.Y + AbsSize.Y
+					Pointer.X < AbsPos.X
+					or Pointer.X > AbsPos.X + AbsSize.X
+					or Pointer.Y < (AbsPos.Y - 20 - 1)
+					or Pointer.Y > AbsPos.Y + AbsSize.Y
 				then
 					Dropdown:CloseDropdown()
 				end
@@ -3562,6 +3800,7 @@ do
 		Position = UDim2.new(0, 7, 0, 1),
 		Size = UDim2.new(1, -14, 1, -1),
 		TextSize = 14,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 203,
 		Parent = InnerFrame,
@@ -3657,6 +3896,7 @@ function Library:SetWatermarkVisibility(Bool)
 		return false
 	end
 	Library.Watermark.Visible = Bool
+	if Bool then Library:UpdateViewportLayout() end
 	return true
 end
 
@@ -3669,10 +3909,16 @@ function Library:SetWatermark(Text)
 		return false
 	end
 	local X, Y = Library:GetTextBounds(Text, Library.Font, 14)
-	Library.Watermark.Size = UDim2.new(0, X + 20, 0, (Y * 1.5) + 5)
+	local Width = X + 20
+	if IsMobile and workspace.CurrentCamera then
+		local LeftInset, _, RightInset = GetViewportInsets()
+		Width = math.min(Width, math.max(120, workspace.CurrentCamera.ViewportSize.X * _invScale - LeftInset - RightInset - (Library.MobileMargin * 2)))
+	end
+	Library.Watermark.Size = UDim2.new(0, Width, 0, (Y * 1.5) + 5)
 	Library:SetWatermarkVisibility(true)
 
 	Library.WatermarkText.Text = Text
+	Library:UpdateViewportLayout()
 	return true
 end
 
@@ -3891,6 +4137,9 @@ function Library:CreateWindow(...)
 		Tabs = {},
 		TabOrder = {},
 		Outer = nil, -- Will be set below
+		DesiredSize = Config.Size,
+		ConfiguredPosition = HasConfiguredPosition,
+		MobilePlaced = false,
 	}
 	Library.PrimaryWindow = Library.PrimaryWindow or Window
 
@@ -3911,6 +4160,42 @@ function Library:CreateWindow(...)
 
 	-- Store reference to Outer for mobile toggle UI
 	Window.Outer = Outer
+
+	function Window:FitToViewport()
+		if not IsMobile or not Outer.Parent then return end
+		local Camera = workspace.CurrentCamera
+		if not Camera then return end
+		local Viewport = Camera.ViewportSize * _invScale
+		local Margin = (Library.MobileMargin or 8) * _invScale
+		local LeftInset, TopInset, RightInset, BottomInset = GetViewportInsets()
+		local ViewportChanged = Library.LastViewportSize and Library.LastViewportSize ~= Viewport
+		local DesiredWidth = self.DesiredSize.X.Scale * Viewport.X + self.DesiredSize.X.Offset
+		local DesiredHeight = self.DesiredSize.Y.Scale * Viewport.Y + self.DesiredSize.Y.Offset
+		if DesiredWidth <= 0 then DesiredWidth = Outer.AbsoluteSize.X * _invScale end
+		if DesiredHeight <= 0 then DesiredHeight = Outer.AbsoluteSize.Y * _invScale end
+		local ControllerReserve = if Library.MobileController
+			then math.max(54, Library.MobileController.AbsoluteSize.Y * _invScale + Margin)
+			else 54
+		local AvailableWidth = math.max(180, Viewport.X - LeftInset - RightInset - Margin * 2)
+		local UsableTop = TopInset + Margin
+		local UsableBottom = Viewport.Y - BottomInset - Margin - ControllerReserve
+		local AvailableHeight = math.max(180, UsableBottom - UsableTop)
+		local Width = math.min(DesiredWidth, AvailableWidth)
+		local Height = math.min(DesiredHeight, AvailableHeight)
+		local CenterX = Outer.AbsolutePosition.X * _invScale + Outer.AbsoluteSize.X * _invScale * 0.5
+		local CenterY = Outer.AbsolutePosition.Y * _invScale + Outer.AbsoluteSize.Y * _invScale * 0.5
+		if not self.MobilePlaced or ViewportChanged then
+			CenterX = LeftInset + (Viewport.X - LeftInset - RightInset) * 0.5
+			CenterY = UsableTop + math.max(AvailableHeight - Height, 0) * 0.5 + Height * 0.5
+			self.MobilePlaced = true
+		else
+			CenterX = math.clamp(CenterX, LeftInset + Margin + Width * 0.5, math.max(LeftInset + Margin + Width * 0.5, Viewport.X - RightInset - Margin - Width * 0.5))
+			CenterY = math.clamp(CenterY, UsableTop + Height * 0.5, math.max(UsableTop + Height * 0.5, UsableBottom - Height * 0.5))
+		end
+		Outer.AnchorPoint = Vector2.new(0.5, 0.5)
+		Outer.Position = UDim2.fromOffset(CenterX, CenterY)
+		Outer.Size = UDim2.fromOffset(Width, Height)
+	end
 
 	local Inner = Library:Create("Frame", {
 		BackgroundColor3 = Library.MainColor,
@@ -3993,13 +4278,23 @@ function Library:CreateWindow(...)
 		BackgroundColor3 = "BackgroundColor",
 	})
 
-	local TabArea = Library:Create("Frame", {
+	local TabAreaProperties = {
 		BackgroundTransparency = 1,
 		Position = UDim2.new(0, 8, 0, 8),
-		Size = UDim2.new(1, -16, 0, 24),
+		Size = UDim2.new(1, -16, 0, IsMobile and 42 or 24),
 		ZIndex = 1,
 		Parent = MainSectionInner,
-	})
+	}
+	if IsMobile then
+		TabAreaProperties.CanvasSize = UDim2.fromOffset(0, 0)
+		TabAreaProperties.ScrollingDirection = Enum.ScrollingDirection.X
+		TabAreaProperties.ScrollBarThickness = 2
+		TabAreaProperties.ScrollBarImageColor3 = Library.AccentColor
+		TabAreaProperties.ElasticBehavior = Enum.ElasticBehavior.Always
+		TabAreaProperties.ScrollingEnabled = true
+	end
+	local TabArea = Library:Create(IsMobile and "ScrollingFrame" or "Frame", TabAreaProperties)
+	if IsMobile then Library:AddToRegistry(TabArea, { ScrollBarImageColor3 = "AccentColor" }) end
 
 	local TabListLayout = Library:Create("UIListLayout", {
 		Padding = UDim.new(0, Config.TabPadding),
@@ -4011,8 +4306,8 @@ function Library:CreateWindow(...)
 	local TabContainer = Library:Create("Frame", {
 		BackgroundColor3 = Library.MainColor,
 		BorderColor3 = Library.OutlineColor,
-		Position = UDim2.new(0, 8, 0, 33),
-		Size = UDim2.new(1, -16, 1, -41),
+		Position = UDim2.new(0, 8, 0, IsMobile and 50 or 33),
+		Size = UDim2.new(1, -16, 1, -(IsMobile and 58 or 41)),
 		ZIndex = 2,
 		Parent = MainSectionInner,
 	})
@@ -4043,7 +4338,7 @@ function Library:CreateWindow(...)
 			if LeftOrder == RightOrder then return Left.InsertionOrder < Right.InsertionOrder end
 			return LeftOrder < RightOrder
 		end)
-		local AvailableWidth = math.floor(TabArea.AbsoluteSize.X + 0.5)
+		local AvailableWidth = math.floor(TabArea.AbsoluteSize.X * _invScale + 0.5)
 		if AvailableWidth <= 0 then
 			local Offset = -((Config.TabPadding * math.max(Count - 1, 0)) / Count)
 			for _, ExistingTab in Window.TabOrder do
@@ -4051,14 +4346,42 @@ function Library:CreateWindow(...)
 			end
 			return
 		end
-		local PhysicalPadding = math.floor((Config.TabPadding * _uiScale) + 0.5)
-		local TotalPadding = PhysicalPadding * math.max(Count - 1, 0)
-		local ContentWidth = math.max(AvailableWidth - TotalPadding, Count)
-		local BaseWidth = math.floor(ContentWidth / Count)
-		local ExtraPixels = math.floor(ContentWidth - (BaseWidth * Count) + 0.5)
-		for Index, ExistingTab in Window.TabOrder do
-			local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
-			ExistingTab.TabButton.Size = UDim2.new(0, Width, 1, 0)
+		local Padding = Config.TabPadding
+		local TotalPadding = Padding * math.max(Count - 1, 0)
+		if IsMobile then
+			local MinimumWidths = {}
+			local MinimumTotal = TotalPadding
+			for Index, ExistingTab in Window.TabOrder do
+				local TextWidth = select(1, Library:GetTextBounds(ExistingTab.Name, Library.Font, 14))
+				local Minimum = math.max(68, TextWidth + 18)
+				MinimumWidths[Index] = Minimum
+				MinimumTotal += Minimum
+			end
+			local RemainingWidth = math.max(AvailableWidth - MinimumTotal, 0)
+			local ExtraPerTab = math.floor(RemainingWidth / Count)
+			local ExtraPixels = RemainingWidth - (ExtraPerTab * Count)
+			local TotalWidth = TotalPadding
+			for Index, ExistingTab in Window.TabOrder do
+				local Width = MinimumWidths[Index]
+				if MinimumTotal <= AvailableWidth then
+					Width += ExtraPerTab + (Index <= ExtraPixels and 1 or 0)
+				end
+				ExistingTab.TabButton.Size = UDim2.fromOffset(Width, IsMobile and 42 or 24)
+				TotalWidth += Width
+			end
+			if IsMobile and TabArea:IsA("ScrollingFrame") then
+				TabArea.CanvasSize = UDim2.fromOffset(math.max(TotalWidth, AvailableWidth), 0)
+			end
+		else
+			local PhysicalPadding = math.floor((Config.TabPadding * _uiScale) + 0.5)
+			local TotalPhysicalPadding = PhysicalPadding * math.max(Count - 1, 0)
+			local ContentWidth = math.max(math.floor(TabArea.AbsoluteSize.X + 0.5) - TotalPhysicalPadding, Count)
+			local BaseWidth = math.floor(ContentWidth / Count)
+			local ExtraPixels = math.floor(ContentWidth - (BaseWidth * Count) + 0.5)
+			for Index, ExistingTab in Window.TabOrder do
+				local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
+				ExistingTab.TabButton.Size = UDim2.new(0, Width, 1, 0)
+			end
 		end
 	end
 	Connect(TabArea:GetPropertyChangedSignal("AbsoluteSize"), function() Window:ResizeTabs() end)
@@ -4068,6 +4391,7 @@ function Library:CreateWindow(...)
 			Groupboxes = {},
 			Tabboxes = {},
 			Selected = false,
+			Name = Name,
 		}
 
 		local TabButton = Library:Create("Frame", {
@@ -4107,7 +4431,7 @@ function Library:CreateWindow(...)
 		local Blocker = Library:Create("Frame", {
 			BackgroundColor3 = Library.MainColor,
 			BorderSizePixel = 0,
-			Position = UDim2.new(0, 0, 1, 0),
+			Position = UDim2.new(0, 0, 1, IsMobile and -1 or 0),
 			Size = UDim2.new(1, 0, 0, 1),
 			BackgroundTransparency = 1,
 			ZIndex = 3,
@@ -4159,6 +4483,11 @@ function Library:CreateWindow(...)
 			ZIndex = 2,
 			Parent = TabFrame,
 		})
+		if IsMobile then
+			RightSide.Visible = false
+			LeftSide.Position = UDim2.new(0, 8 - 1, 0, 8 - 1)
+			LeftSide.Size = UDim2.new(1, -16, 1, -14)
+		end
 		Library:AddToRegistry(LeftSide, { ScrollBarImageColor3 = "AccentColor" })
 		Library:AddToRegistry(RightSide, { ScrollBarImageColor3 = "AccentColor" })
 
@@ -4222,6 +4551,7 @@ function Library:CreateWindow(...)
 
 		function Tab:AddGroupbox(Info)
 			local Groupbox = {}
+			local ParentSide = if IsMobile then LeftSide elseif Info.Side == 1 then LeftSide else RightSide
 
 			local BoxOuter = Library:Create("Frame", {
 				BackgroundColor3 = Library.BackgroundColor,
@@ -4229,7 +4559,7 @@ function Library:CreateWindow(...)
 				BorderMode = Enum.BorderMode.Inset,
 				Size = UDim2.new(1, 0, 0, 507 + 2),
 				ZIndex = 2,
-				Parent = Info.Side == 1 and LeftSide or RightSide,
+				Parent = ParentSide,
 			})
 
 			Library:AddToRegistry(BoxOuter, {
@@ -4321,13 +4651,14 @@ function Library:CreateWindow(...)
 				TabOrder = {},
 			}
 
+			local ParentSide = if IsMobile then LeftSide elseif Info.Side == 1 then LeftSide else RightSide
 			local BoxOuter = Library:Create("Frame", {
 				BackgroundColor3 = Library.BackgroundColor,
 				BorderColor3 = Library.OutlineColor,
 				BorderMode = Enum.BorderMode.Inset,
 				Size = UDim2.new(1, 0, 0, 0),
 				ZIndex = 2,
-				Parent = Info.Side == 1 and LeftSide or RightSide,
+				Parent = ParentSide,
 			})
 
 			Library:AddToRegistry(BoxOuter, {
@@ -4362,13 +4693,23 @@ function Library:CreateWindow(...)
 				BackgroundColor3 = "AccentColor",
 			})
 
-			local TabboxButtons = Library:Create("Frame", {
+			local TabboxButtonProperties = {
 				BackgroundTransparency = 1,
 				Position = UDim2.new(0, 0, 0, 1),
-				Size = UDim2.new(1, 0, 0, 18),
+				Size = UDim2.new(1, 0, 0, IsMobile and 40 or 18),
 				ZIndex = 5,
 				Parent = BoxInner,
-			})
+			}
+			if IsMobile then
+				TabboxButtonProperties.CanvasSize = UDim2.fromOffset(0, 0)
+				TabboxButtonProperties.ScrollingDirection = Enum.ScrollingDirection.X
+				TabboxButtonProperties.ScrollBarThickness = 2
+				TabboxButtonProperties.ScrollBarImageColor3 = Library.AccentColor
+				TabboxButtonProperties.ElasticBehavior = Enum.ElasticBehavior.Always
+				TabboxButtonProperties.ScrollingEnabled = true
+			end
+			local TabboxButtons = Library:Create(IsMobile and "ScrollingFrame" or "Frame", TabboxButtonProperties)
+			if IsMobile then Library:AddToRegistry(TabboxButtons, { ScrollBarImageColor3 = "AccentColor" }) end
 
 			Library:Create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Horizontal,
@@ -4380,24 +4721,52 @@ function Library:CreateWindow(...)
 			function Tabbox:ResizeButtons()
 				local Count = #Tabbox.TabOrder
 				if Count == 0 then return end
-				local AvailableWidth = math.floor(TabboxButtons.AbsoluteSize.X + 0.5)
+				local AvailableWidth = math.floor(TabboxButtons.AbsoluteSize.X * _invScale + 0.5)
 				if AvailableWidth <= 0 then
 					for _, ExistingTab in Tabbox.TabOrder do
 						ExistingTab.Button.Size = UDim2.new(1 / Count, 0, 1, 0)
 					end
 					return
 				end
-				local BaseWidth = math.floor(AvailableWidth / Count)
-				local ExtraPixels = AvailableWidth - (BaseWidth * Count)
-				for Index, ExistingTab in Tabbox.TabOrder do
-					local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
-					ExistingTab.Button.Size = UDim2.new(0, Width, 1, 0)
+				local TotalWidth = 0
+				if IsMobile then
+					local MinimumWidths = {}
+					local MinimumTotal = 0
+					for Index, ExistingTab in Tabbox.TabOrder do
+						local TextWidth = select(1, Library:GetTextBounds(ExistingTab.Name, Library.Font, 13))
+						local Width = math.max(64, TextWidth + 16)
+						MinimumWidths[Index] = Width
+						MinimumTotal += Width
+					end
+					local RemainingWidth = math.max(AvailableWidth - MinimumTotal, 0)
+					local ExtraPerTab = math.floor(RemainingWidth / Count)
+					local ExtraPixels = RemainingWidth - (ExtraPerTab * Count)
+					TotalWidth = 0
+					for Index, ExistingTab in Tabbox.TabOrder do
+						local Width = MinimumWidths[Index]
+						if MinimumTotal <= AvailableWidth then
+							Width += ExtraPerTab + (Index <= ExtraPixels and 1 or 0)
+						end
+						ExistingTab.Button.Size = UDim2.fromOffset(Width, IsMobile and 40 or 18)
+						TotalWidth += Width
+					end
+					if TabboxButtons:IsA("ScrollingFrame") then
+						TabboxButtons.CanvasSize = UDim2.fromOffset(math.max(TotalWidth, AvailableWidth), 0)
+					end
+				else
+					local PhysicalWidth = math.floor(TabboxButtons.AbsoluteSize.X + 0.5)
+					local BaseWidth = math.floor(PhysicalWidth / Count)
+					local ExtraPixels = PhysicalWidth - (BaseWidth * Count)
+					for Index, ExistingTab in Tabbox.TabOrder do
+						local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
+						ExistingTab.Button.Size = UDim2.new(0, Width, 1, 0)
+					end
 				end
 			end
 			Connect(TabboxButtons:GetPropertyChangedSignal("AbsoluteSize"), function() Tabbox:ResizeButtons() end)
 
 			function Tabbox:AddTab(Name)
-				local Tab = { Selected = false }
+				local Tab = { Selected = false, Name = Name }
 
 				local Button = Library:Create("Frame", {
 					BackgroundColor3 = Library.BackgroundColor,
@@ -4436,7 +4805,7 @@ function Library:CreateWindow(...)
 				local Block = Library:Create("Frame", {
 					BackgroundColor3 = Library.BackgroundColor,
 					BorderSizePixel = 0,
-					Position = UDim2.new(0, 0, 1, 0),
+					Position = UDim2.new(0, 0, 1, IsMobile and -1 or 0),
 					Size = UDim2.new(1, 0, 0, 1),
 					Visible = false,
 					ZIndex = 9,
@@ -4449,8 +4818,8 @@ function Library:CreateWindow(...)
 
 				local Container = Library:Create("Frame", {
 					BackgroundTransparency = 1,
-					Position = UDim2.new(0, 6, 0, 22),
-					Size = UDim2.new(1, -12, 1, -22),
+					Position = UDim2.new(0, 6, 0, IsMobile and 41 or 22),
+					Size = UDim2.new(1, -12, 1, -(IsMobile and 41 or 22)),
 					Visible = false,
 					ZIndex = 1,
 					Parent = BoxInner,
@@ -4503,15 +4872,13 @@ function Library:CreateWindow(...)
 						return
 					end
 
-					BoxOuter.Size = UDim2.new(1, 0, 0, 24 + ContainerLayout.AbsoluteContentSize.Y)
+					BoxOuter.Size = UDim2.new(1, 0, 0, (IsMobile and 43 or 24) + ContainerLayout.AbsoluteContentSize.Y)
 				end
 				Connect(ContainerLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function() Tab:Resize() end)
 
-				Connect(Button.InputBegan, function(Input)
-					if IsClickInput(Input) then
-						Tab:Show()
-						Tab:Resize()
-					end
+				Library:ConnectClick(Button, function()
+					Tab:Show()
+					Tab:Resize()
 				end)
 				Connect(Button.MouseEnter, function()
 					if not Tab.Selected then Button.BorderColor3 = Library.AccentColor end
@@ -4552,10 +4919,8 @@ function Library:CreateWindow(...)
 			return Tab:AddTabbox({ Name = Name, Side = 2 })
 		end
 
-		Connect(TabButton.InputBegan, function(Input)
-			if IsClickInput(Input) then
-				Tab:ShowTab()
-			end
+		Library:ConnectClick(TabButton, function()
+			Tab:ShowTab()
 		end)
 		Connect(TabButton.MouseEnter, function()
 			if not Tab.Selected then TabButton.BorderColor3 = Library.AccentColor end
@@ -4653,13 +5018,16 @@ function Library:CreateWindow(...)
 		Library.MobileControllerCreated = true
 		-- Container frame for both buttons (stacked vertically)
 		local MobileContainerOuter = Library:Create('Frame', {
+			AnchorPoint = Vector2.new(0.5, 1);
 			BorderColor3 = Color3.new(0, 0, 0);
-			Position = UDim2.new(0.008, 0, 0.018, 0);
-			Size = UDim2.new(0, 80, 0, 66); -- Width 80, Height 66 (2 buttons + divider)
+			Position = UDim2.new(0.5, 0, 1, -8);
+			Size = UDim2.new(0, 144, 0, 48);
 			ZIndex = 200;
 			Visible = true;
 			Parent = ScreenGui;
 		})
+		Library.MobileController = MobileContainerOuter
+		Library.MobileControllerPlaced = true
 
 		local MobileContainerInner = Library:Create('Frame', {
 			BackgroundColor3 = Library.MainColor;
@@ -4701,10 +5069,10 @@ function Library:CreateWindow(...)
 			end
 		})
 
-		-- Toggle UI button (top half)
+		-- Keep the controls compact and horizontal so they do not cover tab content.
 		local ToggleUIButton = Library:Create('TextButton', {
-			Position = UDim2.new(0, 2, 0, 0);
-			Size = UDim2.new(1, -4, 0, 30);
+			Position = UDim2.new(0, 2, 0, 2);
+			Size = UDim2.new(0.5, -3, 1, -4);
 			BackgroundTransparency = 1;
 			Font = Library.Font;
 			Text = "Toggle UI";
@@ -4719,16 +5087,16 @@ function Library:CreateWindow(...)
 		Library:Create('Frame', {
 			BackgroundColor3 = Library.OutlineColor;
 			BorderSizePixel = 0;
-			Position = UDim2.new(0, 2, 0, 32);
-			Size = UDim2.new(1, -4, 0, 1);
+			Position = UDim2.new(0.5, -1, 0, 3);
+			Size = UDim2.new(0, 1, 1, -6);
 			ZIndex = 203;
 			Parent = MobileContainerGradientFrame;
 		})
 
 		-- Lock UI button (bottom half)
 		local LockUIButton = Library:Create('TextButton', {
-			Position = UDim2.new(0, 2, 0, 33);
-			Size = UDim2.new(1, -4, 0, 30);
+			Position = UDim2.new(0.5, 1, 0, 2);
+			Size = UDim2.new(0.5, -3, 1, -4);
 			BackgroundTransparency = 1;
 			Font = Library.Font;
 			Text = "Lock UI";
@@ -4745,11 +5113,11 @@ function Library:CreateWindow(...)
 		-- Initialize CantDragForced state
 		Library.CantDragForced = false
 
-		Connect(ToggleUIButton.MouseButton1Down, function()
+		Connect(ToggleUIButton.Activated, function()
 			Window:Toggle()
 		end)
 
-		Connect(LockUIButton.MouseButton1Down, function()
+		Connect(LockUIButton.Activated, function()
 			Library.CantDragForced = not Library.CantDragForced
 
 			-- Update button text to show state
@@ -4766,6 +5134,9 @@ function Library:CreateWindow(...)
 
 	-- Register window in Library.Windows for mobile toggle UI
 	table.insert(Library.Windows, Window)
+	Window:FitToViewport()
+	Window:ResizeTabs()
+	if IsMobile then Library:RequestViewportLayout() end
 
 	return Window
 end
