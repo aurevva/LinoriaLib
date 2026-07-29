@@ -29,6 +29,7 @@ local TouchToggleHeight = IsMobile and 40 or 17
 local TouchSliderHeight = IsMobile and 40 or 14
 local TouchKeyHeight = IsMobile and 40 or 17
 local TouchDropdownRowHeight = IsMobile and 42 or 20
+local ControlTextOffset = 1
 
 local _clickHeld = false
 local ActiveTouchInputs = {}
@@ -636,6 +637,7 @@ function Library:CreateLabel(Properties, IsHud)
 		Font = Library.Font,
 		TextColor3 = Library.FontColor,
 		TextSize = 16,
+		TextYAlignment = Enum.TextYAlignment.Center,
 		TextStrokeTransparency = 1,
 	})
 
@@ -1871,7 +1873,8 @@ do
 		})
 
 		local DisplayLabel = Library:CreateLabel({
-			Size = UDim2.new(1, 0, 1, 0),
+			Position = UDim2.fromOffset(0, ControlTextOffset),
+			Size = UDim2.new(1, 0, 1, -ControlTextOffset),
 			TextSize = 13,
 			Text = KeyPicker.Value,
 			TextWrapped = false,
@@ -1931,7 +1934,7 @@ do
 
 			local Label = Library:CreateLabel({
 				Active = false,
-				Position = UDim2.fromOffset(6, 0),
+				Position = UDim2.fromOffset(6, ControlTextOffset),
 				Size = UDim2.new(1, -12, 0, IsMobile and 42 or 18),
 				TextSize = 13,
 				Text = Mode,
@@ -2349,6 +2352,7 @@ do
 			})
 
 			local Label = Library:CreateLabel({
+				Position = UDim2.fromOffset(0, ControlTextOffset),
 				Size = UDim2.new(1, 0, 1, 0),
 				TextSize = 14,
 				Text = Button.Text,
@@ -2599,8 +2603,8 @@ do
 		local Box = Library:Create("TextBox", {
 			BackgroundTransparency = 1,
 
-			Position = UDim2.fromOffset(0, 0),
-			Size = UDim2.fromScale(5, 1),
+			Position = UDim2.fromOffset(0, ControlTextOffset),
+			Size = UDim2.new(5, 0, 1, -ControlTextOffset),
 
 			Font = Library.Font,
 			PlaceholderColor3 = Color3.fromRGB(190, 190, 190),
@@ -2611,6 +2615,7 @@ do
 			TextSize = 14,
 			TextStrokeTransparency = 0,
 			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
 
 			ZIndex = 7,
 			Parent = Container,
@@ -2765,7 +2770,7 @@ do
 		})
 		local ToggleLabel = Library:CreateLabel({
 			Size = UDim2.new(1, -(IsMobile and 40 or 21), 1, 0),
-			Position = UDim2.fromOffset(IsMobile and 40 or 21, 0),
+			Position = UDim2.fromOffset(IsMobile and 40 or 21, ControlTextOffset),
 			TextSize = 14,
 			Text = Info.Text,
 			TextXAlignment = Enum.TextXAlignment.Left,
@@ -2987,15 +2992,16 @@ do
 		})
 
 		local DisplayLabel = Library:CreateLabel({
-			Size = UDim2.new(1, 0, 1, 0),
+			Position = UDim2.fromOffset(0, ControlTextOffset),
+			Size = UDim2.new(1, 0, 1, -ControlTextOffset),
 			TextSize = 14,
 			Text = "Infinite",
 			ZIndex = 9,
 			Parent = SliderInner,
 		})
 		local FillDisplayLabel = Library:CreateLabel({
-			Position = UDim2.fromOffset(0, 0),
-			Size = UDim2.fromOffset(0, TouchSliderHeight),
+			Position = UDim2.fromOffset(0, ControlTextOffset),
+			Size = UDim2.fromOffset(0, TouchSliderHeight - ControlTextOffset),
 			TextColor3 = Library.Black,
 			TextSize = 14,
 			Text = "Infinite",
@@ -3004,7 +3010,10 @@ do
 		})
 		Library.RegistryMap[FillDisplayLabel].Properties.TextColor3 = "Black"
 		local function ResizeFillLabel()
-			FillDisplayLabel.Size = UDim2.fromOffset(math.max(SliderInner.AbsoluteSize.X * _invScale, 1), TouchSliderHeight)
+			FillDisplayLabel.Size = UDim2.fromOffset(
+				math.max(SliderInner.AbsoluteSize.X * _invScale, 1),
+				TouchSliderHeight - ControlTextOffset
+			)
 		end
 		Connect(SliderInner:GetPropertyChangedSignal("AbsoluteSize"), ResizeFillLabel)
 		ResizeFillLabel()
@@ -3222,7 +3231,7 @@ do
 		})
 
 		local ItemList = Library:CreateLabel({
-			Position = UDim2.new(0, 5, 0, 0),
+			Position = UDim2.new(0, 5, 0, ControlTextOffset),
 			Size = UDim2.new(1, -26, 1, 0),
 			TextSize = 14,
 			Text = "--",
@@ -3377,7 +3386,7 @@ do
 				local ButtonLabel = Library:CreateLabel({
 					Active = false,
 					Size = UDim2.new(1, -6, 1, 0),
-					Position = UDim2.new(0, 6, 0, 0),
+					Position = UDim2.new(0, 6, 0, ControlTextOffset),
 					TextSize = 14,
 					Text = Value,
 					TextXAlignment = Enum.TextXAlignment.Left,
@@ -4408,7 +4417,7 @@ function Library:CreateWindow(...)
 		})
 
 		local TabButtonLabel = Library:CreateLabel({
-			Position = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0, 0, 0, ControlTextOffset),
 			Size = UDim2.new(1, 0, 1, -1),
 			Text = Name,
 			TextSize = 14,
@@ -4416,18 +4425,6 @@ function Library:CreateWindow(...)
 			ZIndex = 1,
 			Parent = TabButton,
 		})
-		local TabIndicator = Library:Create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 1),
-			BackgroundColor3 = Library.AccentColor,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 1, -1),
-			Size = UDim2.new(1, -2, 0, 2),
-			Visible = false,
-			ZIndex = 4,
-			Parent = TabButton,
-		})
-		Library:AddToRegistry(TabIndicator, { BackgroundColor3 = "AccentColor" })
-
 		local Blocker = Library:Create("Frame", {
 			BackgroundColor3 = Library.MainColor,
 			BorderSizePixel = 0,
@@ -4526,7 +4523,6 @@ function Library:CreateWindow(...)
 			Library.RegistryMap[TabButton].Properties.BorderColor3 = "AccentColor"
 			TabButtonLabel.TextColor3 = Library.AccentColor
 			Library.RegistryMap[TabButtonLabel].Properties.TextColor3 = "AccentColor"
-			TabIndicator.Visible = true
 			TabFrame.Visible = true
 		end
 
@@ -4539,7 +4535,6 @@ function Library:CreateWindow(...)
 			Library.RegistryMap[TabButton].Properties.BorderColor3 = "OutlineColor"
 			TabButtonLabel.TextColor3 = Library.FontColor
 			Library.RegistryMap[TabButtonLabel].Properties.TextColor3 = "FontColor"
-			TabIndicator.Visible = false
 			TabFrame.Visible = false
 		end
 
@@ -4782,6 +4777,7 @@ function Library:CreateWindow(...)
 				})
 
 				local ButtonLabel = Library:CreateLabel({
+					Position = UDim2.new(0, 0, 0, ControlTextOffset),
 					Size = UDim2.new(1, 0, 1, 0),
 					TextSize = 14,
 					Text = Name,
@@ -4790,18 +4786,6 @@ function Library:CreateWindow(...)
 					ZIndex = 7,
 					Parent = Button,
 				})
-				local Indicator = Library:Create("Frame", {
-					AnchorPoint = Vector2.new(0.5, 1),
-					BackgroundColor3 = Library.AccentColor,
-					BorderSizePixel = 0,
-					Position = UDim2.new(0.5, 0, 1, -1),
-					Size = UDim2.new(1, -2, 0, 2),
-					Visible = false,
-					ZIndex = 9,
-					Parent = Button,
-				})
-				Library:AddToRegistry(Indicator, { BackgroundColor3 = "AccentColor" })
-
 				local Block = Library:Create("Frame", {
 					BackgroundColor3 = Library.BackgroundColor,
 					BorderSizePixel = 0,
@@ -4846,8 +4830,6 @@ function Library:CreateWindow(...)
 					Library.RegistryMap[Button].Properties.BorderColor3 = "AccentColor"
 					ButtonLabel.TextColor3 = Library.AccentColor
 					Library.RegistryMap[ButtonLabel].Properties.TextColor3 = "AccentColor"
-					Indicator.Visible = true
-
 					Tab:Resize()
 				end
 
@@ -4862,7 +4844,6 @@ function Library:CreateWindow(...)
 					Library.RegistryMap[Button].Properties.BorderColor3 = "OutlineColor"
 					ButtonLabel.TextColor3 = Library.FontColor
 					Library.RegistryMap[ButtonLabel].Properties.TextColor3 = "FontColor"
-					Indicator.Visible = false
 				end
 
 				function Tab:Resize()
