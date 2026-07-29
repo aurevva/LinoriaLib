@@ -2496,7 +2496,7 @@ do
 		local ToggleOuter = Library:Create("Frame", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Size = UDim2.new(1, -4, 0, 15),
+			Size = UDim2.new(1, -4, 0, 17),
 			ZIndex = 5,
 			Parent = Container,
 		})
@@ -2504,6 +2504,7 @@ do
 		local ToggleBoxOuter = Library:Create("Frame", {
 			BackgroundColor3 = Color3.new(0, 0, 0),
 			BorderColor3 = Color3.new(0, 0, 0),
+			Position = UDim2.fromOffset(0, 1),
 			Size = UDim2.fromOffset(15, 15),
 			ZIndex = 5,
 			Parent = ToggleOuter,
@@ -2526,34 +2527,6 @@ do
 			BackgroundColor3 = "MainColor",
 			BorderColor3 = "OutlineColor",
 		})
-		local Checkmark = Library:Create("Frame", {
-			BackgroundTransparency = 1,
-			Size = UDim2.fromScale(1, 1),
-			Visible = false,
-			ZIndex = 7,
-			Parent = ToggleInner,
-		})
-		Library:Create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Library.Black,
-			BorderSizePixel = 0,
-			Position = UDim2.fromOffset(5, 8),
-			Rotation = -45,
-			Size = UDim2.fromOffset(2, 5),
-			ZIndex = 8,
-			Parent = Checkmark,
-		})
-		Library:Create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Library.Black,
-			BorderSizePixel = 0,
-			Position = UDim2.fromOffset(9, 7),
-			Rotation = 45,
-			Size = UDim2.fromOffset(2, 9),
-			ZIndex = 8,
-			Parent = Checkmark,
-		})
-
 		local ToggleLabel = Library:CreateLabel({
 			Size = UDim2.new(1, -21, 1, 0),
 			Position = UDim2.fromOffset(21, 0),
@@ -2600,12 +2573,15 @@ do
 		})
 		ResizeToggleText()
 
-		Library:OnHighlight(
-			ToggleRegion,
-			ToggleBoxOuter,
-			{ BorderColor3 = "AccentColor" },
-			{ BorderColor3 = "Black" }
-		)
+		local Hovered = false
+		Connect(ToggleRegion.MouseEnter, function()
+			Hovered = true
+			Toggle:Display()
+		end)
+		Connect(ToggleRegion.MouseLeave, function()
+			Hovered = false
+			Toggle:Display()
+		end)
 
 		function Toggle:UpdateColors()
 			Toggle:Display()
@@ -2617,12 +2593,15 @@ do
 
 		function Toggle:Display()
 			ToggleInner.BackgroundColor3 = Toggle.Value and Library.AccentColor or Library.MainColor
-			ToggleInner.BorderColor3 = Toggle.Value and Library.AccentColorDark or Library.OutlineColor
-			Checkmark.Visible = Toggle.Value
+			local BorderColor = if Hovered then Library.AccentColor
+				elseif Toggle.Value then Library.AccentColorDark
+				else Library.OutlineColor
+			ToggleInner.BorderColor3 = BorderColor
 
 			Library.RegistryMap[ToggleInner].Properties.BackgroundColor3 = Toggle.Value and "AccentColor" or "MainColor"
-			Library.RegistryMap[ToggleInner].Properties.BorderColor3 = Toggle.Value and "AccentColorDark"
-				or "OutlineColor"
+			Library.RegistryMap[ToggleInner].Properties.BorderColor3 = if Hovered then "AccentColor"
+				elseif Toggle.Value then "AccentColorDark"
+				else "OutlineColor"
 		end
 
 		function Toggle:OnChanged(Func)
@@ -2746,6 +2725,7 @@ do
 		local Fill = Library:Create("Frame", {
 			BackgroundColor3 = Library.AccentColor,
 			BorderColor3 = Library.AccentColorDark,
+			ClipsDescendants = true,
 			Size = UDim2.new(0, 0, 1, 0),
 			ZIndex = 7,
 			Parent = SliderInner,
@@ -2776,6 +2756,21 @@ do
 			ZIndex = 9,
 			Parent = SliderInner,
 		})
+		local FillDisplayLabel = Library:CreateLabel({
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(0, 14),
+			TextColor3 = Library.Black,
+			TextSize = 14,
+			Text = "Infinite",
+			ZIndex = 10,
+			Parent = Fill,
+		})
+		Library.RegistryMap[FillDisplayLabel].Properties.TextColor3 = "Black"
+		local function ResizeFillLabel()
+			FillDisplayLabel.Size = UDim2.fromOffset(math.max(SliderInner.AbsoluteSize.X * _invScale, 1), 14)
+		end
+		Connect(SliderInner:GetPropertyChangedSignal("AbsoluteSize"), ResizeFillLabel)
+		ResizeFillLabel()
 
 		Library:OnHighlight(SliderOuter, SliderOuter, { BorderColor3 = "AccentColor" }, { BorderColor3 = "Black" })
 
@@ -2798,6 +2793,7 @@ do
 			else
 				DisplayLabel.Text = string.format("%s/%s", Slider.Value .. Suffix, Slider.Max .. Suffix)
 			end
+			FillDisplayLabel.Text = DisplayLabel.Text
 
 			local Range = Slider.Max - Slider.Min
 			local Ratio = if Range == 0 then 0 else math.clamp((Slider.Value - Slider.Min) / Range, 0, 1)
@@ -3893,6 +3889,7 @@ function Library:CreateWindow(...)
 
 	local Window = {
 		Tabs = {},
+		TabOrder = {},
 		Outer = nil, -- Will be set below
 	}
 	Library.PrimaryWindow = Library.PrimaryWindow or Window
@@ -4038,16 +4035,33 @@ function Library:CreateWindow(...)
 	end
 
 	function Window:ResizeTabs()
-		local Count = 0
-		for _ in Window.Tabs do Count += 1 end
+		local Count = #Window.TabOrder
 		if Count == 0 then return end
-		local Offset = -((Config.TabPadding * math.max(Count - 1, 0)) / Count)
-		for _, ExistingTab in Window.Tabs do
-			if ExistingTab.TabButton then
+		table.sort(Window.TabOrder, function(Left, Right)
+			local LeftOrder = Left.TabButton and Left.TabButton.LayoutOrder or 0
+			local RightOrder = Right.TabButton and Right.TabButton.LayoutOrder or 0
+			if LeftOrder == RightOrder then return Left.InsertionOrder < Right.InsertionOrder end
+			return LeftOrder < RightOrder
+		end)
+		local AvailableWidth = math.floor(TabArea.AbsoluteSize.X + 0.5)
+		if AvailableWidth <= 0 then
+			local Offset = -((Config.TabPadding * math.max(Count - 1, 0)) / Count)
+			for _, ExistingTab in Window.TabOrder do
 				ExistingTab.TabButton.Size = UDim2.new(1 / Count, Offset, 1, 0)
 			end
+			return
+		end
+		local PhysicalPadding = math.floor((Config.TabPadding * _uiScale) + 0.5)
+		local TotalPadding = PhysicalPadding * math.max(Count - 1, 0)
+		local ContentWidth = math.max(AvailableWidth - TotalPadding, Count)
+		local BaseWidth = math.floor(ContentWidth / Count)
+		local ExtraPixels = math.floor(ContentWidth - (BaseWidth * Count) + 0.5)
+		for Index, ExistingTab in Window.TabOrder do
+			local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
+			ExistingTab.TabButton.Size = UDim2.new(0, Width, 1, 0)
 		end
 	end
+	Connect(TabArea:GetPropertyChangedSignal("AbsoluteSize"), function() Window:ResizeTabs() end)
 
 	function Window:AddTab(Name)
 		local Tab = {
@@ -4082,8 +4096,8 @@ function Library:CreateWindow(...)
 			AnchorPoint = Vector2.new(0.5, 1),
 			BackgroundColor3 = Library.AccentColor,
 			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 1, 0),
-			Size = UDim2.new(1, -8, 0, 2),
+			Position = UDim2.new(0.5, 0, 1, -1),
+			Size = UDim2.new(1, -2, 0, 2),
 			Visible = false,
 			ZIndex = 4,
 			Parent = TabButton,
@@ -4118,7 +4132,7 @@ function Library:CreateWindow(...)
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			Position = UDim2.new(0, 8 - 1, 0, 8 - 1),
-			Size = UDim2.new(0.5, -10, 1, -14),
+			Size = UDim2.new(0.5, -11, 1, -14),
 			CanvasSize = UDim2.new(0, 0, 0, 0),
 			BottomImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
 			TopImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
@@ -4133,8 +4147,8 @@ function Library:CreateWindow(...)
 		local RightSide = Library:Create("ScrollingFrame", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 4 + 1, 0, 8 - 1),
-			Size = UDim2.new(0.5, -10, 1, -14),
+			Position = UDim2.new(0.5, 4, 0, 8 - 1),
+			Size = UDim2.new(0.5, -11, 1, -14),
 			CanvasSize = UDim2.new(0, 0, 0, 0),
 			BottomImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
 			TopImage = IsMobile and "rbxasset://textures/ui/Scroll/scroll-middle.png" or "",
@@ -4203,6 +4217,7 @@ function Library:CreateWindow(...)
 		function Tab:SetLayoutOrder(Position)
 			TabButton.LayoutOrder = Position
 			TabListLayout:ApplyLayout()
+			Window:ResizeTabs()
 		end
 
 		function Tab:AddGroupbox(Info)
@@ -4239,8 +4254,8 @@ function Library:CreateWindow(...)
 			local Highlight = Library:Create("Frame", {
 				BackgroundColor3 = Library.AccentColor,
 				BorderSizePixel = 0,
-				Position = UDim2.new(0, 10, 0, 1),
-				Size = UDim2.new(1, -20, 0, 1),
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.new(1, 0, 0, 1),
 				ZIndex = 5,
 				Parent = BoxInner,
 			})
@@ -4303,6 +4318,7 @@ function Library:CreateWindow(...)
 		function Tab:AddTabbox(Info)
 			local Tabbox = {
 				Tabs = {},
+				TabOrder = {},
 			}
 
 			local BoxOuter = Library:Create("Frame", {
@@ -4336,8 +4352,8 @@ function Library:CreateWindow(...)
 			local Highlight = Library:Create("Frame", {
 				BackgroundColor3 = Library.AccentColor,
 				BorderSizePixel = 0,
-				Position = UDim2.new(0, 10, 0, 1),
-				Size = UDim2.new(1, -20, 0, 1),
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.new(1, 0, 0, 1),
 				ZIndex = 10,
 				Parent = BoxInner,
 			})
@@ -4361,13 +4377,32 @@ function Library:CreateWindow(...)
 				Parent = TabboxButtons,
 			})
 
+			function Tabbox:ResizeButtons()
+				local Count = #Tabbox.TabOrder
+				if Count == 0 then return end
+				local AvailableWidth = math.floor(TabboxButtons.AbsoluteSize.X + 0.5)
+				if AvailableWidth <= 0 then
+					for _, ExistingTab in Tabbox.TabOrder do
+						ExistingTab.Button.Size = UDim2.new(1 / Count, 0, 1, 0)
+					end
+					return
+				end
+				local BaseWidth = math.floor(AvailableWidth / Count)
+				local ExtraPixels = AvailableWidth - (BaseWidth * Count)
+				for Index, ExistingTab in Tabbox.TabOrder do
+					local Width = (BaseWidth + (Index <= ExtraPixels and 1 or 0)) * _invScale
+					ExistingTab.Button.Size = UDim2.new(0, Width, 1, 0)
+				end
+			end
+			Connect(TabboxButtons:GetPropertyChangedSignal("AbsoluteSize"), function() Tabbox:ResizeButtons() end)
+
 			function Tabbox:AddTab(Name)
 				local Tab = { Selected = false }
 
 				local Button = Library:Create("Frame", {
 					BackgroundColor3 = Library.BackgroundColor,
 					BorderColor3 = Library.OutlineColor,
-					Size = UDim2.new(0.5, 0, 1, 0),
+					Size = UDim2.fromScale(1, 1),
 					ZIndex = 6,
 					Parent = TabboxButtons,
 				})
@@ -4390,8 +4425,8 @@ function Library:CreateWindow(...)
 					AnchorPoint = Vector2.new(0.5, 1),
 					BackgroundColor3 = Library.AccentColor,
 					BorderSizePixel = 0,
-					Position = UDim2.new(0.5, 0, 1, 0),
-					Size = UDim2.new(1, -10, 0, 2),
+					Position = UDim2.new(0.5, 0, 1, -1),
+					Size = UDim2.new(1, -2, 0, 2),
 					Visible = false,
 					ZIndex = 9,
 					Parent = Button,
@@ -4462,17 +4497,7 @@ function Library:CreateWindow(...)
 				end
 
 				function Tab:Resize()
-					local TabCount = 0
-
-					for _, Tab in next, Tabbox.Tabs do
-						TabCount = TabCount + 1
-					end
-
-					for _, Button in next, TabboxButtons:GetChildren() do
-						if not Button:IsA("UIListLayout") then
-							Button.Size = UDim2.new(1 / TabCount, 0, 1, 0)
-						end
-					end
+					Tabbox:ResizeButtons()
 
 					if not Container.Visible then
 						return
@@ -4496,6 +4521,9 @@ function Library:CreateWindow(...)
 				end)
 
 				Tab.Container = Container
+				Tab.Button = Button
+				Tab.InsertionOrder = #Tabbox.TabOrder + 1
+				table.insert(Tabbox.TabOrder, Tab)
 				Tabbox.Tabs[Name] = Tab
 
 				setmetatable(Tab, BaseGroupbox)
@@ -4541,8 +4569,10 @@ function Library:CreateWindow(...)
 			Tab:ShowTab()
 		end
 
-		Window.Tabs[Name] = Tab
 		Tab.TabButton = TabButton
+		Tab.InsertionOrder = #Window.TabOrder + 1
+		table.insert(Window.TabOrder, Tab)
+		Window.Tabs[Name] = Tab
 		Window:ResizeTabs()
 		return Tab
 	end
